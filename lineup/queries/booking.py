@@ -1,0 +1,110 @@
+"""Queries the booking lane needs beyond the shared ones in lineup/db.py.
+
+Every function takes an open connection, so the calling service keeps all
+its reads and writes in one transaction.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import Connection, Row, insert, select, update
+
+from lineup import schema
+from lineup.models import BookingStatus, SessionStatus, WaitStatus
+
+
+def confirmed_bookings_for_member(conn: Connection, member_id: int) -> list[Row]:
+    """Return a member's confirmed bookings with each session's start and duration.
+
+    Rows have id, session_id, starts_at and duration_min, earliest start first.
+
+    Rules: R3.5.
+    """
+    b, s = schema.bookings, schema.surf_sessions
+    return conn.execute(
+        select(b.c.id, b.c.session_id, s.c.starts_at, s.c.duration_min)
+        .join(s, s.c.id == b.c.session_id)
+        .where(b.c.member_id == member_id, b.c.status == BookingStatus.CONFIRMED.value)
+        .order_by(s.c.starts_at, b.c.id)
+    ).all()
+
+
+def has_confirmed_booking(conn: Connection, member_id: int, session_id: int) -> bool:
+    """Say whether a member already holds a confirmed booking for a session.
+
+    Rules: R3.7.
+    """
+    b = schema.bookings
+    return conn.execute(
+        select(b.c.id).where(
+            b.c.member_id == member_id,
+            b.c.session_id == session_id,
+            b.c.status == BookingStatus.CONFIRMED.value,
+        )
+    ).first() is not None
+
+
+def waiting_entry(conn: Connection, member_id: int, session_id: int) -> int | None:
+    """Return the id of a member's waiting entry for a session, or None.
+
+    Rules: R3.9.
+    """
+    w = schema.waitlist_entries
+    return conn.execute(
+        select(w.c.id).where(
+            w.c.member_id == member_id,
+            w.c.session_id == session_id,
+            w.c.status == WaitStatus.WAITING.value,
+        )
+    ).scalar_one_or_none()
+
+
+def reserve_place(conn: Connection, session_id: int) -> bool:
+    """Take one place in a scheduled session in a single UPDATE; False if none was left.
+
+    One statement, so the database decides who gets the last place: two
+    concurrent bookings can never both see a free place and overfill it.
+
+    Rules: R3.8.
+    """
+    s = schema.surf_sessions
+    result = conn.execute(
+        update(s)
+        .where(
+            s.c.id == session_id,
+            s.c.status == SessionStatus.SCHEDULED.value,
+            s.c.booked_count < s.c.capacity,
+        )
+        .values(booked_count=s.c.booked_count + 1)
+    )
+    return result.rowcount == 1
+
+
+def insert_booking(conn: Connection, session_id: int, member_id: int, now: datetime) -> int:
+    """Insert a confirmed booking and return its id.
+
+    Rules: R3.7, R3.8.
+    """
+    return conn.execute(
+        insert(schema.bookings).values(
+            session_id=session_id,
+            member_id=member_id,
+            status=BookingStatus.CONFIRMED.value,
+            created_at=now,
+        )
+    ).inserted_primary_key[0]
+
+
+def set_wait_status(conn: Connection, entry_id: int, status: WaitStatus, reason: str | None,
+                    now: datetime) -> None:
+    """Move a waitlist entry to a new status, recording why and when.
+
+    Rules: R3.9, R4.3.
+    """
+    w = schema.waitlist_entries
+    conn.execute(
+        update(w)
+        .where(w.c.id == entry_id)
+        .values(status=WaitStatus(status).value, reason=reason, updated_at=now)
+    )
