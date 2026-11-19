@@ -16,7 +16,8 @@ from sqlalchemy.engine import Engine
 
 from lineup import db, schema
 from lineup.config import CREDIT_PACKS, DEFAULT_THRESHOLDS
-from lineup.models import Attendance, BookingStatus, Level, Role, WaitStatus
+from lineup.models import (Attendance, BookingStatus, LedgerKind, Level, RequestStatus,
+                           Role, WaitStatus)
 from lineup.timeutil import from_local, local_date, utcnow
 
 # The seven demo accounts of spec section 14. The address is the key: the
@@ -76,6 +77,22 @@ SEED_BOOKINGS = [
 
 # Bruno waits for the full Intermediate session (R4.1).
 SEED_WAITING = [("intermediate_full", BRUNO)]
+
+# Packs approved last month, in credits. Minus one credit per booking
+# these give the balances section 14 states: Ana 3, Bruno 2, Carla 0,
+# Diogo 2.
+SEED_PURCHASES = [(ANA, 5), (BRUNO, 5), (CARLA, 1), (DIOGO, 5)]
+
+# (member, kind, message, read) for the Inbox and the sidebar count.
+SEED_NOTIFICATIONS = [
+    (ANA, "booking", "Booked: tomorrow at 10:00.", True),
+    (ANA, "credits", "Your 5-session pack was approved.", False),
+    (BRUNO, "waitlist", "You are waiting for the Intermediate session.", False),
+    (BRUNO, "credits", "Your 5-session pack was approved.", True),
+    (CARLA, "booking", "Booked: the Intermediate session.", False),
+    (DIOGO, "attendance", "You were marked as a no-show.", True),
+    (DIOGO, "credits", "Your 5-session pack request is pending.", False),
+]
 
 
 def _reset(conn) -> None:
@@ -237,6 +254,62 @@ def _insert_bookings(conn, people: dict[str, int], sessions: dict[str, int]) -> 
     return written
 
 
+def _insert_credits(conn, people: dict[str, int], packs: dict[int, int],
+                    bookings: list[tuple[int, str]], now: datetime) -> None:
+    """Write the purchases, the booking charges and Diogo's pending request.
+
+    Every charge carries the ref booking:<id>, because invariant 4 of
+    section 9 expects exactly one such row per booking. Purchases use their
+    own refs, so a second run cannot double them.
+
+    Rules: section 14, R10.1, R10.7, R10.8.
+    """
+    last_month = now - timedelta(days=30)
+    admin = people[ADMIN]
+
+    for email, credits in SEED_PURCHASES:
+        pack_id = packs[credits]
+        request_id = conn.execute(
+            insert(schema.credit_requests).values(
+                member_id=people[email],
+                pack_id=pack_id,
+                payment_ref=f"DEMO-{email.split('@')[0].split('.')[-1].upper()}",
+                status=RequestStatus.APPROVED.value,
+                decided_by=admin,
+                decided_at=last_month,
+                created_at=last_month,
+            )
+        ).inserted_primary_key[0]
+        db.ledger_add(conn, people[email], credits, LedgerKind.PURCHASE,
+                      f"request:{request_id}", f"{credits}-session pack")
+
+    for booking_id, email in bookings:
+        db.ledger_add(conn, people[email], -1, LedgerKind.BOOKING,
+                      f"booking:{booking_id}")
+
+    # R10.2 allows this alongside his approved pack: only one may be pending.
+    conn.execute(
+        insert(schema.credit_requests).values(
+            member_id=people[DIOGO],
+            pack_id=packs[5],
+            payment_ref="DEMO-DIOGO-2",
+            status=RequestStatus.PENDING.value,
+            created_at=now - timedelta(days=1),
+        )
+    )
+
+    for email, kind, message, was_read in SEED_NOTIFICATIONS:
+        conn.execute(
+            insert(schema.notifications).values(
+                member_id=people[email],
+                kind=kind,
+                message=message,
+                created_at=now - timedelta(days=1),
+                read_at=now - timedelta(hours=12) if was_read else None,
+            )
+        )
+
+
 def seed(engine: Engine, now: datetime | None = None) -> None:
     """Reset the demo data and load spec section 14, in one transaction.
 
@@ -246,6 +319,7 @@ def seed(engine: Engine, now: datetime | None = None) -> None:
     with engine.begin() as conn:
         _reset(conn)
         people = _upsert_members(conn)
-        _upsert_catalogue(conn)
+        packs = _upsert_catalogue(conn)
         sessions = _insert_sessions(conn, people, now)
-        _insert_bookings(conn, people, sessions)
+        bookings = _insert_bookings(conn, people, sessions)
+        _insert_credits(conn, people, packs, bookings, now)
