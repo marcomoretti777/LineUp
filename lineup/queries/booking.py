@@ -96,6 +96,61 @@ def insert_booking(conn: Connection, session_id: int, member_id: int, now: datet
     ).inserted_primary_key[0]
 
 
+def get_booking(conn: Connection, booking_id: int) -> Row | None:
+    """Return a booking with its session's start, or None if it does not exist.
+
+    The row has id, session_id, member_id, status, refunded, cancelled_at and starts_at.
+
+    Rules: R5.1.
+    """
+    b, s = schema.bookings, schema.surf_sessions
+    return conn.execute(
+        select(b.c.id, b.c.session_id, b.c.member_id, b.c.status, b.c.refunded,
+               b.c.cancelled_at, s.c.starts_at)
+        .join(s, s.c.id == b.c.session_id)
+        .where(b.c.id == booking_id)
+    ).first()
+
+
+def set_booking_cancelled(conn: Connection, booking_id: int, now: datetime) -> bool:
+    """Cancel a confirmed booking in a single UPDATE; False if it was no longer confirmed.
+
+    Only one of two concurrent cancels can match the status guard, so a place
+    is never released twice.
+
+    Rules: R5.1, R5.4.
+    """
+    b = schema.bookings
+    result = conn.execute(
+        update(b)
+        .where(b.c.id == booking_id, b.c.status == BookingStatus.CONFIRMED.value)
+        .values(status=BookingStatus.CANCELLED.value, cancelled_at=now)
+    )
+    return result.rowcount == 1
+
+
+def release_place(conn: Connection, session_id: int) -> None:
+    """Give one place back to a session, never taking booked_count below 0.
+
+    Rules: R5.3.
+    """
+    s = schema.surf_sessions
+    conn.execute(
+        update(s)
+        .where(s.c.id == session_id, s.c.booked_count > 0)
+        .values(booked_count=s.c.booked_count - 1)
+    )
+
+
+def mark_refunded(conn: Connection, booking_id: int) -> None:
+    """Record that a booking's credit was refunded.
+
+    Rules: R5.2.
+    """
+    b = schema.bookings
+    conn.execute(update(b).where(b.c.id == booking_id).values(refunded=True))
+
+
 def set_wait_status(conn: Connection, entry_id: int, status: WaitStatus, reason: str | None,
                     now: datetime) -> None:
     """Move a waitlist entry to a new status, recording why and when.
