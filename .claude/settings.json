@@ -1,0 +1,5 @@
+{
+  "permissions": { "deny": ["Read(./.streamlit/secrets.toml)", "Read(./.env)"] },
+  "attribution": { "commit": "", "pr": "" },
+  "includeCoAuthoredBy": false
+}
