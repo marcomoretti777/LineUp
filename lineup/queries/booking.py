@@ -163,3 +163,67 @@ def set_wait_status(conn: Connection, entry_id: int, status: WaitStatus, reason:
         .where(w.c.id == entry_id)
         .values(status=WaitStatus(status).value, reason=reason, updated_at=now)
     )
+
+
+def waiting_entries(conn: Connection, session_id: int) -> list[Row]:
+    """Return a session's waiting entries with id, member_id and joined_at.
+
+    joined_at is the entry's created_at, named so logic.booking.promotion_order
+    can sort the rows directly.
+
+    Rules: R4.2, R4.6.
+    """
+    w = schema.waitlist_entries
+    return conn.execute(
+        select(w.c.id, w.c.member_id, w.c.created_at.label("joined_at")).where(
+            w.c.session_id == session_id, w.c.status == WaitStatus.WAITING.value
+        )
+    ).all()
+
+
+def insert_waiting_entry(conn: Connection, session_id: int, member_id: int,
+                         now: datetime) -> int:
+    """Insert a waiting entry joined at `now` and return its id.
+
+    Rules: R4.1, R4.2.
+    """
+    return conn.execute(
+        insert(schema.waitlist_entries).values(
+            session_id=session_id,
+            member_id=member_id,
+            status=WaitStatus.WAITING.value,
+            created_at=now,
+            updated_at=now,
+        )
+    ).inserted_primary_key[0]
+
+
+def get_wait_entry(conn: Connection, entry_id: int) -> Row | None:
+    """Return a waitlist entry with its session's start, or None if it does not exist.
+
+    The row has id, session_id, member_id, status and starts_at.
+
+    Rules: R4.5.
+    """
+    w, s = schema.waitlist_entries, schema.surf_sessions
+    return conn.execute(
+        select(w.c.id, w.c.session_id, w.c.member_id, w.c.status, s.c.starts_at)
+        .join(s, s.c.id == w.c.session_id)
+        .where(w.c.id == entry_id)
+    ).first()
+
+
+def leave_entry(conn: Connection, entry_id: int, now: datetime) -> bool:
+    """Mark a waiting entry as left in a single UPDATE; False if it was no longer waiting.
+
+    The status guard stops a leave from overwriting a promotion that won the race.
+
+    Rules: R4.5.
+    """
+    w = schema.waitlist_entries
+    result = conn.execute(
+        update(w)
+        .where(w.c.id == entry_id, w.c.status == WaitStatus.WAITING.value)
+        .values(status=WaitStatus.LEFT.value, updated_at=now)
+    )
+    return result.rowcount == 1
