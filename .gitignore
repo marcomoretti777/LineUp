@@ -12,6 +12,9 @@ data/
 .env
 .env.*
 .streamlit/secrets.toml
+*.bak
+.streamlit/secrets.toml.*
+!.streamlit/secrets.toml.example
 
 # Local-only files
 local/
