@@ -9,16 +9,23 @@ Rules: section 14, R6, R10.1.
 
 from __future__ import annotations
 
+import argparse
+import sys
 from datetime import datetime, time, timedelta
+from pathlib import Path
 
-from sqlalchemy import delete, insert, select, update
-from sqlalchemy.engine import Engine
+# Running "uv run python scripts/seed.py" puts scripts/ on sys.path, not the
+# repository root, so lineup would not import. Added before the imports below.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from lineup import db, schema
-from lineup.config import CREDIT_PACKS, DEFAULT_THRESHOLDS
-from lineup.models import (Attendance, BookingStatus, LedgerKind, Level, RequestStatus,
-                           Role, WaitStatus)
-from lineup.timeutil import from_local, local_date, utcnow
+from sqlalchemy import delete, insert, select, update  # noqa: E402
+from sqlalchemy.engine import Engine  # noqa: E402
+
+from lineup import config, db, schema  # noqa: E402
+from lineup.config import CREDIT_PACKS, DEFAULT_THRESHOLDS  # noqa: E402
+from lineup.models import (Attendance, BookingStatus, LedgerKind, Level,  # noqa: E402
+                           RequestStatus, Role, WaitStatus)
+from lineup.timeutil import from_local, local_date, utcnow  # noqa: E402
 
 # The seven demo accounts of spec section 14. The address is the key: the
 # live database already holds rows created by the login flow, and they must
@@ -323,3 +330,52 @@ def seed(engine: Engine, now: datetime | None = None) -> None:
         sessions = _insert_sessions(conn, people, now)
         bookings = _insert_bookings(conn, people, sessions)
         _insert_credits(conn, people, packs, bookings, now)
+
+
+def _live_engine() -> Engine:
+    """Build the engine for the deployed database, or refuse without a URL.
+
+    The URL holds the database password, so it is read only through
+    config.get_secret and never printed or logged.
+
+    Rules: section 12 (secrets), section 14.
+    """
+    url = config.get_secret("DATABASE_URL")
+    if not url:
+        raise SystemExit(
+            "DATABASE_URL is not set. Put it in .streamlit/secrets.toml or the "
+            "environment before seeding the live database."
+        )
+    return db.make_engine(url)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Seed the local file database, or the live one behind a typed RESET.
+
+    Rules: section 14, section 12.
+    """
+    parser = argparse.ArgumentParser(description="Load the LineUp demo data.")
+    parser.add_argument(
+        "--target", choices=("local", "live"), default="local",
+        help="local writes data/lineup.db (the default); live uses DATABASE_URL",
+    )
+    args = parser.parse_args(argv)
+
+    if args.target == "live":
+        # Named, never shown: printing the URL would leak the password.
+        print("This resets the LIVE LineUp database and deletes its demo data.")
+        if input("Type RESET to continue: ").strip() != "RESET":
+            print("Nothing was changed.")
+            return 1
+        engine = _live_engine()
+    else:
+        engine = db.make_engine()
+
+    db.init_db(engine)
+    seed(engine)
+    print(f"Seeded the {args.target} database with the demo data of section 14.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
