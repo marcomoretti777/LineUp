@@ -92,25 +92,24 @@ def _demo_login(engine: Engine) -> None:
 
 
 @st.fragment(run_every="10s")
-def _unread_badge(engine: Engine, member_id: int) -> None:
-    """Show the unread notification count, refreshed without a full rerun.
+def _unread_count(engine: Engine, member_id: int) -> None:
+    """Redraw only the unread notification count, every ten seconds.
 
-    A fragment keeps the poll off the rest of the screen, so a form being
-    filled in is not thrown away every ten seconds.
+    The fragment holds the text alone: a fragment rerun does not re-register
+    the navigation, so anything page-shaped has to be drawn outside it.
 
     Rules: section 11 (sidebar).
     """
     with engine.begin() as conn:
         unread = db.unread_count(conn, member_id)
-    st.page_link(
-        _PAGES["inbox"][1],
-        label=f"Inbox ({unread} unread)" if unread else "Inbox",
-        icon=":material/mail:",
-    )
+    st.caption(f"{unread} unread" if unread else "No unread notifications")
 
 
-def _sidebar(engine: Engine, actor: Actor) -> None:
+def _sidebar(engine: Engine, actor: Actor, inbox_page: st.Page | None) -> None:
     """Show who is signed in, their balance, unread count and Log out.
+
+    Takes the Inbox Page that st.navigation already registered, because
+    st.page_link only accepts a page the navigation knows about.
 
     Rules: section 11 (sidebar), R1.7.
     """
@@ -122,23 +121,27 @@ def _sidebar(engine: Engine, actor: Actor) -> None:
             with engine.begin() as conn:
                 st.metric("Credits", db.ledger_balance(conn, actor.id))
 
-        _unread_badge(engine, actor.id)
+        if inbox_page is not None:
+            st.page_link(inbox_page, icon=":material/mail:")
+        _unread_count(engine, actor.id)
 
         if st.button("Log out", use_container_width=True):
             st.session_state.clear()
             st.rerun()
 
 
-def _navigation_for(actor: Actor):
-    """Build the navigation holding only the screens this role may open.
+def _pages_for(actor: Actor) -> dict[str, st.Page]:
+    """Build this role's Page objects once, keyed by screen.
+
+    One object per screen, so the navigation and the sidebar link point at
+    the same page rather than at a path.
 
     Rules: section 3, section 11.
     """
-    pages = [
-        st.Page(_PAGES[key][1], title=_PAGES[key][0])
+    return {
+        key: st.Page(_PAGES[key][1], title=_PAGES[key][0])
         for key in _NAVIGATION.get(actor.role, _NAVIGATION[Role.STUDENT])
-    ]
-    return st.navigation(pages)
+    }
 
 
 def main() -> None:
@@ -159,8 +162,11 @@ def main() -> None:
             st.navigation([st.Page("app_pages/login.py", title="Log in")]).run()
         return
 
-    _sidebar(engine, actor)
-    _navigation_for(actor).run()
+    pages = _pages_for(actor)
+    # st.navigation must register the pages before the sidebar links to one.
+    navigation = st.navigation(list(pages.values()))
+    _sidebar(engine, actor, pages.get("inbox"))
+    navigation.run()
 
 
 main()
