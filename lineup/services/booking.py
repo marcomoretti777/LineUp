@@ -13,7 +13,7 @@ from sqlalchemy import Connection, Engine
 from lineup import db
 from lineup.config import REFUND_WINDOW
 from lineup.logic import booking as rules
-from lineup.models import Code, LedgerKind, Result, WaitStatus, fill
+from lineup.models import BookingStatus, Code, LedgerKind, Result, WaitStatus, fill
 from lineup.permissions import Action, require
 from lineup.queries import booking as q
 from lineup.timeutil import fmt_dt, utcnow
@@ -93,3 +93,83 @@ def book(engine: Engine, actor_id: int, session_id: int, now: datetime | None = 
         return Result.success(
             message, {"booking_id": booking_id, "free_cancel_until": free_cancel_until}
         )
+
+
+def _check_cancel(conn: Connection, actor_id: int, booking_id: int, now: datetime):
+    # Shared by preview and cancel so the dialog never offers what cancel would refuse.
+    actor = db.get_actor(conn, actor_id)
+    if actor is None:
+        return None, Result.fail(Code.NOT_FOUND, fill(Code.NOT_FOUND))
+    booking = q.get_booking(conn, booking_id)
+    if booking is None:
+        return None, Result.fail(Code.NOT_FOUND, fill(Code.NOT_FOUND))
+    denied = require(actor, Action.CANCEL_BOOKING, owner_id=booking.member_id)
+    if denied:
+        return None, denied
+    refused = rules.check_can_cancel(
+        is_owner=True,
+        booking_status=BookingStatus(booking.status),
+        now=now,
+        starts_at=booking.starts_at,
+    )
+    if refused:
+        return None, refused
+    return booking, None
+
+
+def cancel_preview(engine: Engine, actor_id: int, booking_id: int,
+                   now: datetime | None = None) -> Result:
+    """Say, without changing anything, whether cancelling a booking now earns a refund.
+
+    Rules: R5.1, R5.2.
+    """
+    now = now or utcnow()
+    with engine.connect() as conn:
+        booking, refused = _check_cancel(conn, actor_id, booking_id, now)
+        if refused:
+            return refused
+        deadline = booking.starts_at - REFUND_WINDOW
+        refund = rules.refund_due(now, booking.starts_at)
+        if refund:
+            message = "Cancel now and you get 1 credit back."
+        else:
+            message = f"No refund: free cancellation ended {fmt_dt(deadline)}."
+        return Result.success(message, {"refund": refund, "refund_deadline": deadline})
+
+
+def cancel_booking(engine: Engine, actor_id: int, booking_id: int,
+                   now: datetime | None = None) -> Result:
+    """Cancel a student's booking, refund 1 credit inside the window and free the place.
+
+    Rules: R5.1, R5.2, R5.3, R5.4, R10.8.
+    """
+    now = now or utcnow()
+    with engine.begin() as conn:
+        booking, refused = _check_cancel(conn, actor_id, booking_id, now)
+        if refused:
+            return refused
+
+        db.lock_member(conn, booking.member_id)
+        # The status read above may be stale; only this guarded UPDATE decides.
+        if not q.set_booking_cancelled(conn, booking.id, now):
+            return Result.fail(Code.ALREADY_DONE, fill(Code.ALREADY_DONE))
+        q.release_place(conn, booking.session_id)
+
+        refunded = False
+        if rules.refund_due(now, booking.starts_at):
+            # The unique ref is the guard against a second refund for the same booking.
+            refunded = db.ledger_add(conn, booking.member_id, 1, LedgerKind.REFUND,
+                                     f"refund:{booking.id}")
+            if refunded:
+                q.mark_refunded(conn, booking.id)
+
+        promote_waitlist(conn, booking.session_id, now)
+
+        outcome = (
+            "1 credit refunded."
+            if refunded
+            else "No refund: cancelled less than 24 h before the start."
+        )
+        message = f"Cancelled: {fmt_dt(booking.starts_at)}. {outcome}"
+        db.notify(conn, booking.member_id, "cancellation", message)
+        return Result.success(message, {"refunded": refunded})
