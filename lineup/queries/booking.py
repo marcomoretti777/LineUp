@@ -6,6 +6,7 @@ its reads and writes in one transaction.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 
 from sqlalchemy import Connection, Row, insert, select, update
@@ -43,6 +44,40 @@ def has_confirmed_booking(conn: Connection, member_id: int, session_id: int) -> 
             b.c.status == BookingStatus.CONFIRMED.value,
         )
     ).first() is not None
+
+
+def confirmed_session_ids(conn: Connection, member_id: int,
+                          session_ids: Iterable[int]) -> set[int]:
+    """Return which of the given sessions a member holds a confirmed booking for.
+
+    Rules: R3.7.
+    """
+    b = schema.bookings
+    return set(
+        conn.execute(
+            select(b.c.session_id).where(
+                b.c.member_id == member_id,
+                b.c.session_id.in_(list(session_ids)),
+                b.c.status == BookingStatus.CONFIRMED.value,
+            )
+        ).scalars()
+    )
+
+
+def waiting_entries_for_sessions(conn: Connection, session_ids: Iterable[int]) -> list[Row]:
+    """Return the waiting entries of several sessions with id, session_id, member_id, joined_at.
+
+    One query for a whole page of sessions; joined_at is named as in
+    waiting_entries so logic.booking.promotion_order can sort the rows.
+
+    Rules: R4.2, R4.6.
+    """
+    w = schema.waitlist_entries
+    return conn.execute(
+        select(w.c.id, w.c.session_id, w.c.member_id, w.c.created_at.label("joined_at")).where(
+            w.c.session_id.in_(list(session_ids)), w.c.status == WaitStatus.WAITING.value
+        )
+    ).all()
 
 
 def waiting_entry(conn: Connection, member_id: int, session_id: int) -> int | None:

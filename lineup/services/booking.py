@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Iterable
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import Connection, Engine
 
@@ -14,6 +17,7 @@ from lineup.models import (
     Code,
     LedgerKind,
     Result,
+    Role,
     SessionStatus,
     SessionView,
     WaitStatus,
@@ -43,12 +47,18 @@ def _clash_at(conn: Connection, member_id: int, session: SessionView) -> datetim
     )
 
 
-def _position(conn: Connection, member_id: int, session_id: int) -> int | None:
-    ordered = rules.promotion_order(q.waiting_entries(conn, session_id))
+def _rank(entries: Iterable[Any], member_id: int) -> int | None:
+    # One place turns promotion order into a 1-based position, so the join
+    # message and the sessions page always show the same number.
+    ordered = rules.promotion_order(entries)
     return next(
         (i for i, entry in enumerate(ordered, start=1) if entry.member_id == member_id),
         None,
     )
+
+
+def _position(conn: Connection, member_id: int, session_id: int) -> int | None:
+    return _rank(q.waiting_entries(conn, session_id), member_id)
 
 
 def promote_waitlist(conn: Connection, session_id: int, now: datetime) -> list[int]:
@@ -190,6 +200,38 @@ def waitlist_position(engine: Engine, actor_id: int, session_id: int) -> int | N
     """
     with engine.connect() as conn:
         return _position(conn, actor_id, session_id)
+
+
+def my_status_for_sessions(
+    engine: Engine, actor_id: int, session_ids: Iterable[int]
+) -> dict[int, str | tuple[str, int] | None]:
+    """Map each session to the student's own status: "booked", ("waiting", position) or None.
+
+    Staff and unknown members get an empty mapping, since only students book.
+    Two queries cover the whole list, so the sessions page does not query per row.
+
+    Rules: R3.7, R4.2, R4.6.
+    """
+    ids = list(session_ids)
+    with engine.connect() as conn:
+        actor = db.get_actor(conn, actor_id)
+        if actor is None or actor.role != Role.STUDENT or not ids:
+            return {}
+        booked = q.confirmed_session_ids(conn, actor.id, ids)
+        waiting: dict[int, list[Any]] = defaultdict(list)
+        for entry in q.waiting_entries_for_sessions(conn, ids):
+            waiting[entry.session_id].append(entry)
+
+    status: dict[int, str | tuple[str, int] | None] = {}
+    for session_id in ids:
+        position = _rank(waiting.get(session_id, []), actor.id)
+        if session_id in booked:
+            status[session_id] = "booked"
+        elif position is not None:
+            status[session_id] = ("waiting", position)
+        else:
+            status[session_id] = None
+    return status
 
 
 def book(engine: Engine, actor_id: int, session_id: int, now: datetime | None = None) -> Result:
