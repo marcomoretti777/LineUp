@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from lineup import db, schema
@@ -179,8 +179,11 @@ def change_level(engine: Engine, actor_id: int, member_id: int, level: str,
         )
 
 
-def list_members(engine: Engine, actor_id: int) -> Result:
-    """List every member with role, level and balance, for an admin.
+def list_members(engine: Engine, actor_id: int, search: str | None = None) -> Result:
+    """List members with role, level and balance for an admin, optionally filtered.
+
+    The search matches a name or an address, ignoring case, so an admin
+    can find one member without reading the whole club.
 
     Rules: R1.5, section 3, section 11 (Members screen).
     """
@@ -192,12 +195,19 @@ def list_members(engine: Engine, actor_id: int) -> Result:
         if denied:
             return denied
 
-        rows = conn.execute(
-            select(schema.members.c.id, schema.members.c.full_name,
-                   schema.members.c.email, schema.members.c.role,
-                   schema.members.c.level)
-            .order_by(schema.members.c.full_name)
-        ).all()
+        query = select(
+            schema.members.c.id, schema.members.c.full_name,
+            schema.members.c.email, schema.members.c.role,
+            schema.members.c.level,
+        )
+        wanted = (search or "").strip().lower()
+        if wanted:
+            like = f"%{wanted}%"
+            query = query.where(
+                func.lower(schema.members.c.full_name).like(like)
+                | func.lower(schema.members.c.email).like(like)
+            )
+        rows = conn.execute(query.order_by(schema.members.c.full_name)).all()
         listed = [
             {
                 "id": row.id,
