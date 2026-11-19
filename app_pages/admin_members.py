@@ -66,23 +66,34 @@ st.caption(f"{ui.plain(chosen['full_name'])} — {chosen['balance']} credits")
 
 roles = [role.value for role in Role]
 levels = [level.value for level in Level]
+
+# The keys carry the member id: a widget key keeps its own value across
+# reruns and ignores index=, so a shared key would leave the pickers showing
+# the member looked at before and save a change nobody asked for.
 left, right = st.columns(2)
 with left:
     new_role = st.selectbox("Role", options=roles,
-                            index=roles.index(chosen["role"]), key="members_role")
+                            index=roles.index(chosen["role"]),
+                            key=f"members_role_{chosen_id}")
 with right:
     new_level = st.selectbox("Level", options=levels,
-                             index=levels.index(chosen["level"]), key="members_level")
+                             index=levels.index(chosen["level"]),
+                             key=f"members_level_{chosen_id}")
 
 if st.button("Save", type="primary"):
-    changed = False
+    # One Save, one message: the first refusal, or the last change that went
+    # through. A refused role never silently leaves the level changed.
+    outcome = None
     if new_role != chosen["role"]:
-        changed = True
-        ui.show_result(ui.run_action(
-            members.change_role, engine, actor.id, chosen_id, new_role))
-    if new_level != chosen["level"]:
-        changed = True
-        ui.show_result(ui.run_action(
-            members.change_level, engine, actor.id, chosen_id, new_level))
-    if not changed:
-        st.info("Nothing to save: the role and level are unchanged.")
+        outcome = ui.run_action(
+            members.change_role, engine, actor.id, chosen_id, new_role)
+    if outcome is not None and not outcome.ok:
+        ui.show_result(outcome)
+    else:
+        if new_level != chosen["level"]:
+            outcome = ui.run_action(
+                members.change_level, engine, actor.id, chosen_id, new_level)
+        if outcome is None:
+            st.info("Nothing to save: the role and level are unchanged.")
+        else:
+            ui.show_result(outcome)
