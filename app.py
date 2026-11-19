@@ -12,7 +12,7 @@ import streamlit as st
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
-from lineup import config, schema, ui
+from lineup import config, db, schema, ui
 from lineup.models import Actor, Role
 
 # Title, then the page file, in the order spec section 11 lists them.
@@ -91,6 +91,44 @@ def _demo_login(engine: Engine) -> None:
         st.rerun()
 
 
+@st.fragment(run_every="10s")
+def _unread_badge(engine: Engine, member_id: int) -> None:
+    """Show the unread notification count, refreshed without a full rerun.
+
+    A fragment keeps the poll off the rest of the screen, so a form being
+    filled in is not thrown away every ten seconds.
+
+    Rules: section 11 (sidebar).
+    """
+    with engine.begin() as conn:
+        unread = db.unread_count(conn, member_id)
+    st.page_link(
+        _PAGES["inbox"][1],
+        label=f"Inbox ({unread} unread)" if unread else "Inbox",
+        icon=":material/mail:",
+    )
+
+
+def _sidebar(engine: Engine, actor: Actor) -> None:
+    """Show who is signed in, their balance, unread count and Log out.
+
+    Rules: section 11 (sidebar), R1.7.
+    """
+    with st.sidebar:
+        st.markdown(f"**{ui.plain(actor.full_name)}**")
+        st.caption(actor.role.value.replace("_", " ").capitalize())
+
+        if actor.role == Role.STUDENT:
+            with engine.begin() as conn:
+                st.metric("Credits", db.ledger_balance(conn, actor.id))
+
+        _unread_badge(engine, actor.id)
+
+        if st.button("Log out", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
+
+
 def _navigation_for(actor: Actor):
     """Build the navigation holding only the screens this role may open.
 
@@ -121,6 +159,7 @@ def main() -> None:
             st.navigation([st.Page("app_pages/login.py", title="Log in")]).run()
         return
 
+    _sidebar(engine, actor)
     _navigation_for(actor).run()
 
 
