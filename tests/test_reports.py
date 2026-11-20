@@ -347,3 +347,13 @@ def test_r12_8_non_admin_cannot_view_kpis(engine, dataset, now, who):
 
     assert not result.ok
     assert result.code == Code.FORBIDDEN
+
+
+@pytest.mark.parametrize("calloffs, total", [
+    ({"conditions": 2, "other": 1}, 3),
+    ({}, 0),
+])
+def test_r12_6_calloffs_total(calloffs, total):
+    from lineup.logic.reports import calloffs_total
+
+    assert calloffs_total(calloffs) == total
