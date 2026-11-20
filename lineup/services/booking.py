@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import Connection, Engine
 
@@ -12,8 +16,11 @@ from lineup.logic import booking as rules
 from lineup.models import (
     BookingStatus,
     Code,
+    Condition,
+    Label,
     LedgerKind,
     Result,
+    Role,
     SessionStatus,
     SessionView,
     WaitStatus,
@@ -28,13 +35,51 @@ from lineup.timeutil import fmt_dt, fmt_time, utcnow
 _REMOVAL_REASONS = {Code.NO_CREDITS: "no credits", Code.CLASH: "clash"}
 
 
+# Disabled-button labels for the refusals the sessions page shows on the card;
+# every other refusal leaves the button on, so the click explains itself.
+_CLOSED_LABEL = "Booking closed"
+_BOOKED_LABEL = "Already booked"
+_WAITING_LABEL = "Already waiting"
+
+_CALL_OFF_WARNING = (
+    "The instructor may call this session off; you would get your credit back."
+)
+
+MyStatus = str | tuple[str, int] | None
+
+
+@dataclass(frozen=True)
+class SessionCard:
+    """Everything the sessions page shows for one session, decided by the service.
+
+    my_status is "booked", ("waiting", position) or None. can_book drives the
+    "Only sessions I can book" filter; book_block is the label of a disabled
+    button, or None when the button stays on.
+
+    Rules: LU03, R3.3, R3.7, R4.1, R5.2.
+    """
+
+    session: SessionView
+    waiting_count: int
+    my_status: MyStatus
+    can_book: bool
+    can_join: bool
+    book_block: str | None
+    free_cancel_until: datetime
+
+
 def _clash_at(conn: Connection, member_id: int, session: SessionView) -> datetime | None:
     # Shared by book, join and promote so all three agree on what clashes; the
     # start is returned so the clash message can name it (A4).
+    return _first_clash(q.confirmed_bookings_for_member(conn, member_id), session)
+
+
+def _first_clash(bookings: Sequence[Any], session: SessionView) -> datetime | None:
+    # Takes the bookings already loaded, so a page of cards reads them once.
     return next(
         (
             other.starts_at
-            for other in q.confirmed_bookings_for_member(conn, member_id)
+            for other in bookings
             if other.session_id != session.id
             and rules.overlaps(other.starts_at, other.duration_min,
                                session.starts_at, session.duration_min)
@@ -43,12 +88,18 @@ def _clash_at(conn: Connection, member_id: int, session: SessionView) -> datetim
     )
 
 
-def _position(conn: Connection, member_id: int, session_id: int) -> int | None:
-    ordered = rules.promotion_order(q.waiting_entries(conn, session_id))
+def _rank(entries: Iterable[Any], member_id: int) -> int | None:
+    # One place turns promotion order into a 1-based position, so the join
+    # message and the sessions page always show the same number.
+    ordered = rules.promotion_order(entries)
     return next(
         (i for i, entry in enumerate(ordered, start=1) if entry.member_id == member_id),
         None,
     )
+
+
+def _position(conn: Connection, member_id: int, session_id: int) -> int | None:
+    return _rank(q.waiting_entries(conn, session_id), member_id)
 
 
 def promote_waitlist(conn: Connection, session_id: int, now: datetime) -> list[int]:
@@ -190,6 +241,127 @@ def waitlist_position(engine: Engine, actor_id: int, session_id: int) -> int | N
     """
     with engine.connect() as conn:
         return _position(conn, actor_id, session_id)
+
+
+def my_status_for_sessions(
+    engine: Engine, actor_id: int, session_ids: Iterable[int]
+) -> dict[int, str | tuple[str, int] | None]:
+    """Map each session to the student's own status: "booked", ("waiting", position) or None.
+
+    Staff and unknown members get an empty mapping, since only students book.
+    Two queries cover the whole list, so the sessions page does not query per row.
+
+    Rules: R3.7, R4.2, R4.6.
+    """
+    ids = list(session_ids)
+    with engine.connect() as conn:
+        actor = db.get_actor(conn, actor_id)
+        if actor is None or actor.role != Role.STUDENT or not ids:
+            return {}
+        return _statuses(conn, actor.id, ids, _waiting_by_session(conn, ids))
+
+
+def _waiting_by_session(conn: Connection, ids: list[int]) -> dict[int, list[Any]]:
+    waiting: dict[int, list[Any]] = defaultdict(list)
+    for entry in q.waiting_entries_for_sessions(conn, ids):
+        waiting[entry.session_id].append(entry)
+    return waiting
+
+
+def _statuses(conn: Connection, member_id: int, ids: list[int],
+              waiting: dict[int, list[Any]]) -> dict[int, MyStatus]:
+    # Shared by my_status_for_sessions and session_cards so both always agree.
+    booked = q.confirmed_session_ids(conn, member_id, ids)
+    status: dict[int, MyStatus] = {}
+    for session_id in ids:
+        position = _rank(waiting.get(session_id, []), member_id)
+        if session_id in booked:
+            status[session_id] = "booked"
+        elif position is not None:
+            status[session_id] = ("waiting", position)
+        else:
+            status[session_id] = None
+    return status
+
+
+def _block_label(refused: Result | None, status: MyStatus) -> str | None:
+    if refused is None:
+        return None
+    if refused.code == Code.CLOSED:
+        return _CLOSED_LABEL
+    if refused.code == Code.DUPLICATE:
+        return _WAITING_LABEL if isinstance(status, tuple) else _BOOKED_LABEL
+    return None
+
+
+def session_cards(engine: Engine, actor_id: int, now: datetime | None = None) -> list[SessionCard]:
+    """Return a card for every upcoming session, with what this member may do on it.
+
+    Staff and unknown members get the same cards with no actions. Clash and
+    no-credit refusals leave the Book button on, so clicking it shows the
+    service's message, but they still make the session not bookable.
+
+    Rules: LU03, R3.1, R3.2, R3.3, R3.4, R3.5, R3.7, R4.1, R4.2, R5.2.
+    """
+    now = now or utcnow()
+    with engine.connect() as conn:
+        actor = db.get_actor(conn, actor_id)
+        sessions = db.upcoming_sessions(conn, now)
+        ids = [session.id for session in sessions]
+        waiting = _waiting_by_session(conn, ids)
+        student = actor is not None and actor.role == Role.STUDENT
+        statuses = _statuses(conn, actor.id, ids, waiting) if student and ids else {}
+        balance = db.ledger_balance(conn, actor.id) if student else 0
+        bookings = q.confirmed_bookings_for_member(conn, actor.id) if student else []
+
+    cards = []
+    for session in sessions:
+        status = statuses.get(session.id)
+        can_book = can_join = False
+        block = None
+        if student:
+            full = session.booked_count >= session.capacity
+            clash_at = _first_clash(bookings, session)
+            common = {
+                "role": actor.role,
+                "session_status": session.status,
+                "now": now,
+                "starts_at": session.starts_at,
+                "already_booked": status == "booked",
+                "has_clash": clash_at is not None,
+                "clash_at": clash_at,
+            }
+            if full:
+                refused = rules.check_can_join_waitlist(
+                    **common, is_full=True, already_waiting=isinstance(status, tuple)
+                )
+                can_join = refused is None
+            else:
+                refused = rules.check_can_book(**common, balance=balance)
+                can_book = refused is None
+            block = _block_label(refused, status)
+        cards.append(SessionCard(
+            session=session,
+            waiting_count=len(waiting.get(session.id, [])),
+            my_status=status,
+            can_book=can_book,
+            can_join=can_join,
+            book_block=block,
+            free_cancel_until=session.starts_at - REFUND_WINDOW,
+        ))
+    return cards
+
+
+def call_off_warning(condition: Condition) -> str | None:
+    """Return the booking dialog's call-off warning for a No-go or Unknown label, else None.
+
+    The label never blocks booking; it only warns.
+
+    Rules: R3.10, R6.5.
+    """
+    if condition.label in (Label.NO_GO, Label.UNKNOWN):
+        return _CALL_OFF_WARNING
+    return None
 
 
 def book(engine: Engine, actor_id: int, session_id: int, now: datetime | None = None) -> Result:
