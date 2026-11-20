@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Connection, Row, insert, select, update
+from sqlalchemy import Connection, Row, func, insert, select, update
 
 from lineup import schema
 from lineup.models import RequestStatus
@@ -136,6 +136,21 @@ def pending_with_members(conn: Connection) -> list[Row]:
         .order_by(r.c.created_at, r.c.id)
     ).all()
 
+
+def decided_with_members(conn: Connection, limit: int) -> list[Row]:
+    """Return decided requests (approved, rejected, withdrawn) with member and pack, newest first.
+
+    Withdrawn requests have no decided_at, so they sort by when they were made.
+
+    Rules: R10.4, R10.5.
+    """
+    r = schema.credit_requests
+    return conn.execute(
+        _request_listing()
+        .where(r.c.status != RequestStatus.PENDING.value)
+        .order_by(func.coalesce(r.c.decided_at, r.c.created_at).desc(), r.c.id.desc())
+        .limit(limit)
+    ).all()
 
 def requests_for_member(conn: Connection, member_id: int) -> list[Row]:
     """Return a member's credit requests, newest first.
