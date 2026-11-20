@@ -159,6 +159,13 @@ def calloffs_by_category(categories: Iterable[str | None]) -> dict[str, int]:
     return dict(Counter(c for c in categories if c is not None))
 
 
+def calloffs_total(calloffs: dict[str, int]) -> int:
+    """Return the number of call-offs across all categories.
+
+    Rules: R12.6.
+    """
+    return sum(calloffs.values())
+
 def bookings_per_week(session_starts: Iterable[datetime]) -> dict[str, int]:
     """Count bookings by the ISO week of their session's Lisbon start date, oldest week first.
 
