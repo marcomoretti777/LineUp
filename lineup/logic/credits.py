@@ -17,6 +17,15 @@ NOTE_MAX = 200
 _PAYMENT_REF_PATTERN = re.compile(r"[A-Za-z0-9 \-/#]+")
 
 
+def _invalid(field: str, problem: str, allowed: str) -> Result:
+    """Build an INVALID result with the catalogue message filled in.
+
+    Rules: section 11 (INVALID needs field, problem and allowed).
+    """
+    message = fill(Code.INVALID, field=field, problem=problem, allowed=allowed)
+    return Result.fail(Code.INVALID, message)
+
+
 def validate_payment_ref(text: str) -> tuple[str, Result | None]:
     """Trim a payment reference and check its length and characters.
 
@@ -25,9 +34,17 @@ def validate_payment_ref(text: str) -> tuple[str, Result | None]:
     """
     clean = (text or "").strip()
     if not PAYMENT_REF_MIN <= len(clean) <= PAYMENT_REF_MAX:
-        return clean, Result.fail(Code.INVALID, fill(Code.INVALID))
+        return clean, _invalid(
+            "Payment reference",
+            f"it has {len(clean)} characters",
+            f"{PAYMENT_REF_MIN} to {PAYMENT_REF_MAX} characters",
+        )
     if not _PAYMENT_REF_PATTERN.fullmatch(clean):
-        return clean, Result.fail(Code.INVALID, fill(Code.INVALID))
+        return clean, _invalid(
+            "Payment reference",
+            "it contains a character that is not allowed",
+            "letters, digits, spaces and - / #",
+        )
     return clean, None
 
 
@@ -38,7 +55,11 @@ def validate_note(text: str) -> Result | None:
     """
     clean = (text or "").strip()
     if not NOTE_MIN <= len(clean) <= NOTE_MAX:
-        return Result.fail(Code.INVALID, fill(Code.INVALID))
+        return _invalid(
+            "Note",
+            f"it has {len(clean)} characters",
+            f"{NOTE_MIN} to {NOTE_MAX} characters",
+        )
     return None
 
 
@@ -52,7 +73,7 @@ def check_can_request(*, role: Role, has_pending: bool, pack_active: bool) -> Re
     if role != Role.STUDENT:
         return Result.fail(Code.FORBIDDEN, fill(Code.FORBIDDEN))
     if not pack_active:
-        return Result.fail(Code.INVALID, fill(Code.INVALID))
+        return _invalid("Pack", "it is not available", "an active credit pack")
     if has_pending:
         return Result.fail(Code.DUPLICATE, fill(Code.DUPLICATE))
     return None
