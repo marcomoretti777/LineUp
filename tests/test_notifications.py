@@ -1,20 +1,15 @@
 """Tests for the notifications service: inbox listing and read state (R11.2-R11.3)."""
 
 import pytest
+from conftest import make_member
 
 from lineup import db
+from lineup.models import Code
 from lineup.services.notifications import list_notifications, mark_all_read, unread
 
 
-def _field(item, name):
-    """Read a field from a notification whether it is a dict or an object."""
-    if isinstance(item, dict):
-        return item[name]
-    return getattr(item, name)
-
-
 def _messages(result):
-    return [_field(n, "message") for n in result.data]
+    return [n["message"] for n in result.data]
 
 
 def _notify_many(engine, member_id, messages, kind="info"):
@@ -24,13 +19,11 @@ def _notify_many(engine, member_id, messages, kind="info"):
 
 
 def _unread_count(engine, member_id):
-    with engine.begin() as conn:
+    with engine.connect() as conn:
         return db.unread_count(conn, member_id)
 
 
-# ---------- inbox listing ----------
-
-def test_list_returns_only_actor_notifications_newest_first(engine, make_member):
+def test_r11_3_list_returns_only_own_newest_first(engine):
     a = make_member(engine)
     b = make_member(engine)
     _notify_many(engine, a, ["A-1", "A-2", "A-3"])
@@ -42,7 +35,7 @@ def test_list_returns_only_actor_notifications_newest_first(engine, make_member)
     assert _messages(result) == ["A-3", "A-2", "A-1"]
 
 
-def test_list_caps_at_50(engine, make_member):
+def test_r11_3_list_caps_at_50_newest(engine):
     a = make_member(engine)
     _notify_many(engine, a, [f"A-{i}" for i in range(1, 56)])
 
@@ -54,53 +47,60 @@ def test_list_caps_at_50(engine, make_member):
     assert _messages(result)[-1] == "A-6"
 
 
-def test_list_empty_inbox_ok(engine, make_member):
+def test_r11_3_list_empty_inbox_ok(engine):
     a = make_member(engine)
 
     result = list_notifications(engine, a)
 
     assert result.ok
-    assert list(result.data) == []
+    assert result.data == []
 
 
-# ---------- read state ----------
-
-def test_unread_returns_actor_count(engine, make_member):
+def test_r11_3_unread_counts_only_own(engine):
     a = make_member(engine)
     b = make_member(engine)
     _notify_many(engine, a, ["A-1", "A-2", "A-3"])
     _notify_many(engine, b, ["B-1", "B-2"])
 
-    result_a = unread(engine, a)
-    result_b = unread(engine, b)
-
-    assert result_a.ok
-    assert result_a.data == 3
-    assert result_b.ok
-    assert result_b.data == 2
+    assert unread(engine, a).data == 3
+    assert unread(engine, b).data == 2
 
 
-def test_mark_all_read_only_touches_actor(engine, make_member, now):
+def test_r11_3_mark_all_read_touches_only_own(engine, now):
     a = make_member(engine)
-    b = make_member(engine)
+    b = make_member(engine, role="instructor")
     _notify_many(engine, a, ["A-1", "A-2", "A-3"])
     _notify_many(engine, b, ["B-1", "B-2"])
 
     result = mark_all_read(engine, a, now=now)
 
     assert result.ok
-    assert _unread_count(engine, a) == 0
     assert unread(engine, a).data == 0
-    for n in list_notifications(engine, a).data:
-        assert _field(n, "read_at") is not None
+    assert all(n["read_at"] == now for n in list_notifications(engine, a).data)
     assert _unread_count(engine, b) == 2
-    for n in list_notifications(engine, b).data:
-        assert _field(n, "read_at") is None
+    assert all(n["read_at"] is None for n in list_notifications(engine, b).data)
 
 
-# ---------- R11.2 notify is part of the caller's transaction ----------
+def test_r11_3_list_as_b_never_includes_a(engine):
+    a = make_member(engine)
+    b = make_member(engine)
+    _notify_many(engine, a, ["A-secret-1", "A-secret-2"])
+    assert list_notifications(engine, b).data == []
 
-def test_r11_2_notify_rolls_back_on_exception(engine, make_member):
+    _notify_many(engine, b, ["B-own-1"])
+    _notify_many(engine, a, ["A-secret-3"])
+
+    assert _messages(list_notifications(engine, b)) == ["B-own-1"]
+
+
+def test_r11_3_unknown_actor_not_found(engine, now):
+    for result in (list_notifications(engine, 9999), unread(engine, 9999),
+                   mark_all_read(engine, 9999, now=now)):
+        assert not result.ok
+        assert result.code == Code.NOT_FOUND
+
+
+def test_r11_2_notify_rolls_back_with_failed_action(engine):
     a = make_member(engine)
 
     with pytest.raises(RuntimeError):
@@ -109,31 +109,4 @@ def test_r11_2_notify_rolls_back_on_exception(engine, make_member):
             raise RuntimeError("boom")
 
     assert _unread_count(engine, a) == 0
-    assert list(list_notifications(engine, a).data) == []
-
-
-# ---------- R11.3 members never see each other's notifications ----------
-
-def test_r11_3_list_as_b_never_includes_a_when_b_empty(engine, make_member):
-    a = make_member(engine)
-    b = make_member(engine)
-    _notify_many(engine, a, ["A-secret-1", "A-secret-2"])
-
-    result = list_notifications(engine, b)
-
-    assert result.ok
-    assert list(result.data) == []
-
-
-def test_r11_3_list_as_b_never_includes_a_when_both_have_some(engine, make_member):
-    a = make_member(engine)
-    b = make_member(engine)
-    _notify_many(engine, a, ["A-secret-1", "A-secret-2"])
-    _notify_many(engine, b, ["B-own-1"])
-    _notify_many(engine, a, ["A-secret-3"])
-
-    result = list_notifications(engine, b)
-
-    assert result.ok
-    assert _messages(result) == ["B-own-1"]
-    assert not any(m.startswith("A-") for m in _messages(result))
+    assert list_notifications(engine, a).data == []
