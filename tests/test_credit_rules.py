@@ -147,3 +147,9 @@ def test_money_fmt_eur(cents, expected):
 
 def test_money_price_per_credit_cents():
     assert price_per_credit_cents(6500, 5) == 1300
+
+
+def test_r10_3_payment_ref_accepts_3_characters():
+    clean, err = validate_payment_ref("abc")
+    assert err is None
+    assert clean == "abc"
