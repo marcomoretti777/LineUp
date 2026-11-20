@@ -357,3 +357,37 @@ def test_r12_6_calloffs_total(calloffs, total):
     from lineup.logic.reports import calloffs_total
 
     assert calloffs_total(calloffs) == total
+
+
+# ---------- hardening (C08) ----------
+
+def test_r12_2_session_ending_at_now_counts(engine, admin, now):
+    instructor = make_member(engine, role="instructor")
+    make_session(engine, instructor, now - timedelta(minutes=90), duration_min=90)
+    make_session(engine, instructor, now - timedelta(minutes=89), duration_min=90)
+
+    result = _kpis(engine, admin, NOV_1, NOV_30, now)
+
+    assert result.ok
+    assert result.data["sessions_run"] == 1
+
+
+def test_r12_5_period_edges_in_lisbon_time(engine, admin, now):
+    # July is UTC+1 in Lisbon: 22:30 UTC on 31 Jul is still July there,
+    # 23:30 UTC on 31 Jul is already 1 Aug.
+    instructor = make_member(engine, role="instructor")
+    ana, bruno = make_member(engine), make_member(engine)
+    _request(engine, ana, 5, "approved", datetime(2026, 7, 30, 12, 0),
+             decided_at=datetime(2026, 7, 31, 22, 30), decided_by=admin)
+    _request(engine, bruno, 1, "approved", datetime(2026, 7, 30, 12, 0),
+             decided_at=datetime(2026, 7, 31, 23, 30), decided_by=admin)
+    _called_off(engine, instructor, datetime(2026, 7, 31, 22, 0), "conditions")
+    _called_off(engine, instructor, datetime(2026, 7, 31, 23, 0), "other")
+
+    july = _kpis(engine, admin, date(2026, 7, 1), date(2026, 7, 31), now)
+    august = _kpis(engine, admin, date(2026, 8, 1), date(2026, 8, 31), now)
+
+    assert (july.data["credits_sold"], july.data["revenue_cents"]) == (5, 6500)
+    assert july.data["calloffs"] == {"conditions": 1}
+    assert (august.data["credits_sold"], august.data["revenue_cents"]) == (1, 1500)
+    assert august.data["calloffs"] == {"other": 1}
