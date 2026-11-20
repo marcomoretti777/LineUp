@@ -1,0 +1,26 @@
+# Python and uv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local data
+data/
+*.db
+
+# Secrets
+.env
+.env.*
+.streamlit/secrets.toml
+*.bak
+.streamlit/secrets.toml.*
+!.streamlit/secrets.toml.example
+
+# Local-only files
+local/
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Editors and OS
+.vscode/
+.DS_Store
