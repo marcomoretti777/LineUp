@@ -7,7 +7,7 @@ its reads and writes in one transaction.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import Connection, Row, func, select, update
 
@@ -16,6 +16,7 @@ from lineup.models import (
     Attendance,
     BookingStatus,
     Level,
+    RequestStatus,
     SessionStatus,
     SessionView,
     WaitStatus,
@@ -139,3 +140,133 @@ def sessions_from(conn: Connection, since: datetime,
                     status=SessionStatus(r.status))
         for r in conn.execute(query).all()
     ]
+
+
+# ---------- reports (R12) ----------
+# Periods arrive as a naive UTC range [lo, hi): lo inclusive, hi exclusive.
+
+def sessions_run(conn: Connection, lo: datetime, hi: datetime, now: datetime) -> list[Row]:
+    """Return sessions starting in [lo, hi) that were not called off and ended by `now`.
+
+    Rows have id, level, capacity and booked_count. The end time is checked in
+    Python because adding minutes to a timestamp differs between SQLite and Postgres.
+
+    Rules: R12.2.
+    """
+    s = schema.surf_sessions
+    rows = conn.execute(
+        select(s.c.id, s.c.level, s.c.capacity, s.c.booked_count, s.c.starts_at,
+               s.c.duration_min)
+        .where(s.c.starts_at >= lo, s.c.starts_at < hi, s.c.starts_at < now,
+               s.c.status == SessionStatus.SCHEDULED.value)
+        .order_by(s.c.starts_at, s.c.id)
+    ).all()
+    return [r for r in rows if r.starts_at + timedelta(minutes=r.duration_min) <= now]
+
+
+def attendance_marks(conn: Connection, session_ids: Iterable[int]) -> list[str | None]:
+    """Return the attendance value of every confirmed booking in the given sessions.
+
+    Rules: R12.4.
+    """
+    ids = list(session_ids)
+    if not ids:
+        return []
+    b = schema.bookings
+    return list(conn.execute(
+        select(b.c.attendance).where(b.c.session_id.in_(ids),
+                                     b.c.status == BookingStatus.CONFIRMED.value)
+    ).scalars())
+
+
+def approved_requests(conn: Connection, lo: datetime, hi: datetime) -> list[Row]:
+    """Return requests approved in [lo, hi) with their pack's credits and price_cents.
+
+    Rules: R12.5.
+    """
+    r, p = schema.credit_requests, schema.credit_packs
+    return conn.execute(
+        select(r.c.id, p.c.credits, p.c.price_cents)
+        .join(p, p.c.id == r.c.pack_id)
+        .where(r.c.status == RequestStatus.APPROVED.value,
+               r.c.decided_at >= lo, r.c.decided_at < hi)
+    ).all()
+
+
+def calloff_categories(conn: Connection, lo: datetime, hi: datetime) -> list[str | None]:
+    """Return the call-off category of every called-off session starting in [lo, hi).
+
+    Rules: R12.6.
+    """
+    s = schema.surf_sessions
+    return list(conn.execute(
+        select(s.c.call_off_category).where(
+            s.c.status == SessionStatus.CALLED_OFF.value, s.c.starts_at >= lo, s.c.starts_at < hi,
+        )
+    ).scalars())
+
+
+def confirmed_booking_starts(conn: Connection, lo: datetime, hi: datetime) -> list[datetime]:
+    """Return the session start of every confirmed booking whose session starts in [lo, hi).
+
+    Rules: R12.3 (bookings chart).
+    """
+    b, s = schema.bookings, schema.surf_sessions
+    return list(conn.execute(
+        select(s.c.starts_at).join(b, b.c.session_id == s.c.id)
+        .where(b.c.status == BookingStatus.CONFIRMED.value,
+               s.c.starts_at >= lo, s.c.starts_at < hi)
+    ).scalars())
+
+
+def bookings_export_rows(conn: Connection, lo: datetime, hi: datetime) -> list[Row]:
+    """Return every booking whose session starts in [lo, hi), for the bookings CSV.
+
+    Rows have starts_at, level, instructor, student_email, status, attendance
+    and refunded, by session start and then booking id.
+
+    Rules: R12.7.
+    """
+    b, s = schema.bookings, schema.surf_sessions
+    student, instructor = schema.members.alias("student"), schema.members.alias("instructor")
+    return conn.execute(
+        select(s.c.starts_at, s.c.level, instructor.c.full_name.label("instructor"),
+               student.c.email.label("student_email"), b.c.status, b.c.attendance,
+               b.c.refunded)
+        .join(s, s.c.id == b.c.session_id)
+        .join(student, student.c.id == b.c.member_id)
+        .join(instructor, instructor.c.id == s.c.instructor_id)
+        .where(s.c.starts_at >= lo, s.c.starts_at < hi)
+        .order_by(s.c.starts_at, b.c.id)
+    ).all()
+
+
+def ledger_export_rows(conn: Connection, lo: datetime, hi: datetime) -> list[Row]:
+    """Return ledger rows created in [lo, hi) with the member's email, oldest first.
+
+    Rules: R10.8, R12.7.
+    """
+    lg, m = schema.credit_ledger, schema.members
+    return conn.execute(
+        select(lg.c.created_at, m.c.email.label("member_email"), lg.c.delta, lg.c.kind,
+               lg.c.ref)
+        .join(m, m.c.id == lg.c.member_id)
+        .where(lg.c.created_at >= lo, lg.c.created_at < hi)
+        .order_by(lg.c.created_at, lg.c.id)
+    ).all()
+
+
+def requests_export_rows(conn: Connection, lo: datetime, hi: datetime) -> list[Row]:
+    """Return credit requests created in [lo, hi) with member email and pack details, oldest first.
+
+    Rules: R10.5, R12.7.
+    """
+    r, p, m = schema.credit_requests, schema.credit_packs, schema.members
+    return conn.execute(
+        select(r.c.created_at, m.c.email.label("member_email"), p.c.name.label("pack"),
+               p.c.credits, p.c.price_cents, r.c.status, r.c.decided_at, r.c.decision_note)
+        .join(p, p.c.id == r.c.pack_id)
+        .join(m, m.c.id == r.c.member_id)
+        .where(r.c.created_at >= lo, r.c.created_at < hi)
+        .order_by(r.c.created_at, r.c.id)
+    ).all()
