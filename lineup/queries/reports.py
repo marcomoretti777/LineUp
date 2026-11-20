@@ -12,7 +12,14 @@ from datetime import datetime
 from sqlalchemy import Connection, Row, func, select, update
 
 from lineup import schema
-from lineup.models import Attendance, BookingStatus, Level, WaitStatus
+from lineup.models import (
+    Attendance,
+    BookingStatus,
+    Level,
+    SessionStatus,
+    SessionView,
+    WaitStatus,
+)
 
 
 def booking_for_attendance(conn: Connection, booking_id: int) -> Row | None:
@@ -104,3 +111,31 @@ def attended_beginner_counts(conn: Connection, member_ids: Iterable[int]) -> dic
         .group_by(b.c.member_id)
     ).all()
     return {member_id: count for member_id, count in rows}
+
+
+def sessions_from(conn: Connection, since: datetime,
+                  instructor_id: int | None = None) -> list[SessionView]:
+    """Return sessions starting at or after `since`, called-off ones included, by start.
+
+    With instructor_id, only that instructor's sessions.
+
+    Rules: section 3 (View roster), section 11 (Roster).
+    """
+    s, m = schema.surf_sessions, schema.members
+    query = (
+        select(s.c.id, s.c.instructor_id, m.c.full_name.label("instructor_name"),
+               s.c.starts_at, s.c.duration_min, s.c.level, s.c.capacity,
+               s.c.booked_count, s.c.status)
+        .join(m, m.c.id == s.c.instructor_id)
+        .where(s.c.starts_at >= since)
+        .order_by(s.c.starts_at, s.c.id)
+    )
+    if instructor_id is not None:
+        query = query.where(s.c.instructor_id == instructor_id)
+    return [
+        SessionView(id=r.id, instructor_id=r.instructor_id, instructor_name=r.instructor_name,
+                    starts_at=r.starts_at, duration_min=r.duration_min, level=Level(r.level),
+                    capacity=r.capacity, booked_count=r.booked_count,
+                    status=SessionStatus(r.status))
+        for r in conn.execute(query).all()
+    ]
