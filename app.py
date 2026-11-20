@@ -1,7 +1,7 @@
 """Entry point: page setup, the login gate and navigation by role.
 
 Business rules live in lineup/logic/ and lineup/services/; this file only
-calls config, db and ui.
+calls config, db, ui and the services.
 
 Rules: section 8, section 11, R1.7.
 """
@@ -9,11 +9,11 @@ Rules: section 8, section 11, R1.7.
 from __future__ import annotations
 
 import streamlit as st
-from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
-from lineup import config, db, schema, ui
+from lineup import config, db, ui
 from lineup.models import Actor, Role
+from lineup.services import members
 
 # Title, then the page file, in the order spec section 11 lists them.
 _PAGES = {
@@ -49,22 +49,6 @@ def _demo_mode() -> bool:
     )
 
 
-def _demo_members(engine: Engine) -> list[tuple[int, str, str]]:
-    """List every member as (id, full name, role) for the demo picker.
-
-    Read straight from storage because demo mode is a shell concern with no
-    service behind it; task F06 moves it into services/members.py with the
-    rest of the sign-in rules.
-
-    Rules: R1.7.
-    """
-    query = select(
-        schema.members.c.id, schema.members.c.full_name, schema.members.c.role
-    ).order_by(schema.members.c.full_name)
-    with engine.begin() as conn:
-        return [(row.id, row.full_name, row.role) for row in conn.execute(query)]
-
-
 def _demo_login(engine: Engine) -> None:
     """Show the demo banner and let anyone sign in as any member, no password.
 
@@ -75,13 +59,13 @@ def _demo_login(engine: Engine) -> None:
         "Local demo mode: anyone can sign in as any member without a password. "
         "Never point this at real data."
     )
-    members = _demo_members(engine)
-    if not members:
+    people = members.list_demo_members(engine)
+    if not people:
         st.info("No members yet. Load the demo data with the seed script (task F07).")
         return
 
     labels = {
-        member_id: f"{full_name} ({role})" for member_id, full_name, role in members
+        member_id: f"{full_name} ({role})" for member_id, full_name, role in people
     }
     chosen = st.selectbox(
         "Sign in as", options=list(labels), format_func=labels.get, key="demo_pick"
