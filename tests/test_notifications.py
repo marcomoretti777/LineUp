@@ -110,3 +110,16 @@ def test_r11_2_notify_rolls_back_with_failed_action(engine):
 
     assert _unread_count(engine, a) == 0
     assert list_notifications(engine, a).data == []
+
+
+def test_r11_2_refused_reject_writes_no_notification(engine, now):
+    from lineup.services import credits
+
+    admin = make_member(engine, role="admin")
+    ana = make_member(engine)
+    request_id = credits.request_pack(engine, ana, 2, "MBWAY 912", now=now).data["id"]
+
+    refused = credits.reject_request(engine, admin, request_id, "no", now=now)
+
+    assert refused.code == Code.INVALID
+    assert _unread_count(engine, ana) == 0

@@ -282,3 +282,52 @@ def test_decided_requests_student_forbidden(engine):
 
     assert not result.ok
     assert result.code == Code.FORBIDDEN
+
+
+def test_r10_5_student_reject_forbidden(engine, now):
+    ana, bruno = make_member(engine), make_member(engine)
+    request_id = make_request(engine, ana, now)
+
+    result = credits.reject_request(engine, bruno, request_id, "Not paid", now=now)
+
+    assert not result.ok
+    assert result.code == Code.FORBIDDEN
+    assert request_row(engine, request_id).status == "pending"
+    assert notification_count(engine, ana) == 0
+
+
+def test_r10_7_instructor_statement_forbidden(engine):
+    instructor = make_member(engine, role="instructor")
+
+    result = credits.statement(engine, instructor)
+
+    assert not result.ok
+    assert result.code == Code.FORBIDDEN
+
+
+def test_a13_credit_approval(engine, now):
+    admin = make_member(engine, role="admin")
+    ana = make_member(engine)
+    one_pack = 1
+
+    first = credits.request_pack(engine, ana, FIVE_PACK, "MBWAY 912", now=now)
+    second = credits.request_pack(engine, ana, one_pack, "MBWAY 913", now=now)
+    assert first.ok
+    assert second.code == Code.DUPLICATE
+    r = schema.credit_requests
+    assert count(engine, r, r.c.member_id == ana, r.c.status == "pending") == 1
+
+    approved = credits.approve_request(engine, admin, first.data["id"], now=now)
+    again = credits.approve_request(engine, admin, first.data["id"], now=now)
+    assert approved.ok
+    assert again.code == Code.ALREADY_DONE
+    assert balance(engine, ana) == 5
+    assert ledger_count(engine, ana) == 1
+
+    later = make_request(engine, ana, now + timedelta(hours=1), pack_id=one_pack)
+    no_note = credits.reject_request(engine, admin, later, "", now=now)
+    assert no_note.code == Code.INVALID
+    assert request_row(engine, later).status == "pending"
+    with_note = credits.reject_request(engine, admin, later, "Payment not found", now=now)
+    assert with_note.ok
+    assert request_row(engine, later).status == "rejected"

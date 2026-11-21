@@ -316,3 +316,54 @@ def test_roster_sessions_student_is_forbidden(engine, now):
 
     assert not result.ok
     assert result.code == Code.FORBIDDEN
+
+
+# ---------- hardening (C08) ----------
+
+def test_r9_2_no_show_corrected_to_attended_is_saved(engine, setup):
+    first = _mark(engine, setup["instructor"], setup["booking"], "no_show", setup["start"])
+    second = _mark(engine, setup["instructor"], setup["booking"], "attended",
+                   setup["start"] + timedelta(days=1))
+
+    assert first.ok
+    assert second.ok
+    assert _attendance(engine, setup["booking"]) == "attended"
+
+
+def test_r9_2_cancelled_booking_is_invalid(engine, setup):
+    s, b = schema.surf_sessions, schema.bookings
+    with engine.begin() as conn:
+        conn.execute(update(b).where(b.c.id == setup["booking"]).values(status="cancelled"))
+        conn.execute(update(s).where(s.c.id == setup["session"]).values(booked_count=0))
+
+    result = _mark(engine, setup["instructor"], setup["booking"], "attended", setup["start"])
+
+    assert not result.ok
+    assert result.code == Code.INVALID
+    assert _attendance(engine, setup["booking"]) is None
+
+
+def test_r9_2_unknown_value_is_invalid(engine, setup):
+    result = _mark(engine, setup["instructor"], setup["booking"], "late", setup["start"])
+
+    assert not result.ok
+    assert result.code == Code.INVALID
+    assert _attendance(engine, setup["booking"]) is None
+
+
+def test_r12_8_other_instructor_cannot_export_roster(engine, setup):
+    other = make_member(engine, role="instructor")
+
+    result = _roster_csv(engine, other, setup["session"])
+
+    assert not result.ok
+    assert result.code == Code.FORBIDDEN
+
+
+def test_r12_8_admin_exports_any_roster(engine, setup):
+    admin = make_member(engine, role="admin")
+
+    result = _roster_csv(engine, admin, setup["session"])
+
+    assert result.ok
+    assert len(_parse(result.data)) == 2
