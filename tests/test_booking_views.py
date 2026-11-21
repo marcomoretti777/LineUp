@@ -285,3 +285,188 @@ def test_call_off_warning_only_for_no_go_and_unknown(label, warns):
         )
     else:
         assert warning is None
+
+
+# --- My bookings page: list_my_bookings (LU06, R4.5, R4.6, R5.2) ---
+
+
+def _mine(engine, actor_id, now):
+    # Imported here so a missing service fails each test, not collection.
+    from lineup.services.booking import list_my_bookings
+
+    return list_my_bookings(engine, actor_id, now=now)
+
+
+def _end_booking(engine, booking_id, session_id, status="confirmed", attendance=None,
+                 refunded=False):
+    # Moves a factory booking to its final state while keeping every invariant:
+    # booked_count, called-off sessions and the refund ledger row all match.
+    from lineup import db
+
+    with engine.begin() as conn:
+        conn.execute(
+            update(schema.bookings)
+            .where(schema.bookings.c.id == booking_id)
+            .values(status=status, attendance=attendance, refunded=refunded)
+        )
+        if status != "confirmed":
+            conn.execute(
+                update(schema.surf_sessions)
+                .where(schema.surf_sessions.c.id == session_id)
+                .values(booked_count=schema.surf_sessions.c.booked_count - 1)
+            )
+        if status == "called_off":
+            conn.execute(
+                update(schema.surf_sessions)
+                .where(schema.surf_sessions.c.id == session_id)
+                .values(status="called_off")
+            )
+        if refunded:
+            db.ledger_add(conn, _member_of(conn, booking_id), 1, "refund",
+                          f"refund:{booking_id}")
+
+
+def _member_of(conn, booking_id):
+    from sqlalchemy import select
+
+    b = schema.bookings
+    return conn.execute(select(b.c.member_id).where(b.c.id == booking_id)).scalar_one()
+
+
+def _booked(engine, student, session_id):
+    give_credits(engine, student, 1)
+    return make_booking(engine, student, session_id)
+
+
+def test_lu06_upcoming_lists_confirmed_future_bookings_by_start(engine, now, student):
+    instructor = make_member(engine, role="instructor", name="Rita Mar")
+    later = make_session(engine, instructor, now + timedelta(days=3), level="intermediate")
+    sooner = make_session(engine, instructor, now + timedelta(days=1))
+    later_booking = _booked(engine, student, later)
+    sooner_booking = _booked(engine, student, sooner)
+
+    mine = _mine(engine, student, now)
+
+    assert [u.booking_id for u in mine.upcoming] == [sooner_booking, later_booking]
+    first = mine.upcoming[0]
+    assert first.session.id == sooner
+    assert first.session.starts_at == now + timedelta(days=1)
+    assert first.session.level == "beginner"
+    assert first.session.instructor_name == "Rita Mar"
+    assert first.free_cancel_until == now + timedelta(days=1) - timedelta(hours=24)
+    assert mine.upcoming[1].session.level == "intermediate"
+    assert mine.past == []
+
+
+def test_r4_6_waiting_lists_entries_with_position(engine, now, instructor, student):
+    session_id = _full_session(engine, instructor, now + timedelta(days=2))
+    add_waiting(engine, make_member(engine), session_id, joined_at=now - timedelta(hours=2))
+    entry_id = add_waiting(engine, student, session_id, joined_at=now - timedelta(hours=1))
+
+    mine = _mine(engine, student, now)
+
+    assert [(w.entry_id, w.session.id, w.position) for w in mine.waiting] == [
+        (entry_id, session_id, 2)
+    ]
+    assert mine.upcoming == []
+
+
+@pytest.mark.parametrize("status", ["left", "removed", "cleared", "promoted"])
+def test_r4_5_entries_no_longer_waiting_are_not_listed(engine, now, instructor, student, status):
+    session_id = _full_session(engine, instructor, now + timedelta(days=2))
+    entry_id = add_waiting(engine, student, session_id, joined_at=now)
+    with engine.begin() as conn:
+        conn.execute(
+            update(schema.waitlist_entries)
+            .where(schema.waitlist_entries.c.id == entry_id)
+            .values(status=status)
+        )
+
+    assert _mine(engine, student, now).waiting == []
+
+
+def test_r4_6_waiting_entries_for_sessions_already_started_are_not_listed(
+    engine, now, instructor, student
+):
+    session_id = _full_session(engine, instructor, now - timedelta(minutes=30))
+    add_waiting(engine, student, session_id, joined_at=now - timedelta(days=1))
+
+    assert _mine(engine, student, now).waiting == []
+
+
+def test_lu06_past_shows_attendance_and_refund_flags_newest_first(
+    engine, now, instructor, student
+):
+    attended = make_session(engine, instructor, now - timedelta(days=4))
+    no_show = make_session(engine, instructor, now - timedelta(days=3))
+    called_off = make_session(engine, instructor, now - timedelta(days=2))
+    cancelled = make_session(engine, instructor, now - timedelta(days=1))
+    unmarked = make_session(engine, instructor, now - timedelta(hours=3))
+    b_attended = _booked(engine, student, attended)
+    b_no_show = _booked(engine, student, no_show)
+    b_called_off = _booked(engine, student, called_off)
+    b_cancelled = _booked(engine, student, cancelled)
+    b_unmarked = _booked(engine, student, unmarked)
+    _end_booking(engine, b_attended, attended, attendance="attended")
+    _end_booking(engine, b_no_show, no_show, attendance="no_show")
+    _end_booking(engine, b_called_off, called_off, status="called_off", refunded=True)
+    _end_booking(engine, b_cancelled, cancelled, status="cancelled")
+
+    mine = _mine(engine, student, now)
+
+    assert [(p.booking_id, p.outcome, p.refunded) for p in mine.past] == [
+        (b_unmarked, None, False),
+        (b_cancelled, "cancelled", False),
+        (b_called_off, "called_off", True),
+        (b_no_show, "no_show", False),
+        (b_attended, "attended", False),
+    ]
+    assert mine.past[0].session.starts_at == now - timedelta(hours=3)
+    assert mine.upcoming == []
+
+
+def test_lu06_cancelled_future_booking_moves_to_history_not_upcoming(
+    engine, now, instructor, student
+):
+    session_id = make_session(engine, instructor, now + timedelta(days=3))
+    booking_id = _booked(engine, student, session_id)
+    _end_booking(engine, booking_id, session_id, status="cancelled", refunded=True)
+
+    mine = _mine(engine, student, now)
+
+    assert mine.upcoming == []
+    assert [(p.booking_id, p.outcome, p.refunded) for p in mine.past] == [
+        (booking_id, "cancelled", True)
+    ]
+
+
+def test_lu06_other_students_bookings_never_appear(engine, now, instructor, student):
+    other = make_member(engine)
+    future = make_session(engine, instructor, now + timedelta(days=2))
+    past = make_session(engine, instructor, now - timedelta(days=2))
+    full = _full_session(engine, instructor, now + timedelta(days=3))
+    _booked(engine, other, future)
+    _end_booking(engine, _booked(engine, other, past), past, attendance="attended")
+    add_waiting(engine, other, full, joined_at=now)
+    mine_booking = _booked(engine, student, future)
+
+    mine = _mine(engine, student, now)
+
+    assert [u.booking_id for u in mine.upcoming] == [mine_booking]
+    assert mine.waiting == []
+    assert mine.past == []
+
+
+@pytest.mark.parametrize("role", ["instructor", "admin"])
+def test_lu06_staff_get_empty_lists(engine, now, instructor, role):
+    staff = make_member(engine, role=role)
+
+    mine = _mine(engine, staff, now)
+
+    assert (mine.upcoming, mine.waiting, mine.past) == ([], [], [])
+
+
+def test_lu06_unknown_actor_gets_empty_lists(engine, now):
+    mine = _mine(engine, 999, now)
+
+    assert (mine.upcoming, mine.waiting, mine.past) == ([], [], [])
