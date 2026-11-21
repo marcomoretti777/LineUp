@@ -19,6 +19,7 @@ from lineup.models import (
     Condition,
     Label,
     LedgerKind,
+    Level,
     Result,
     Role,
     SessionStatus,
@@ -44,6 +45,10 @@ _WAITING_LABEL = "Already waiting"
 _CALL_OFF_WARNING = (
     "The instructor may call this session off; you would get your credit back."
 )
+
+# The two sentences the cancel dialog shows before the student confirms (R5.2).
+_REFUND_YES = "Your credit will be refunded."
+_REFUND_NO = "Less than 24 hours before the start: no refund."
 
 MyStatus = str | tuple[str, int] | None
 
@@ -457,9 +462,9 @@ def cancel_preview(engine: Engine, actor_id: int, booking_id: int,
         deadline = booking.starts_at - REFUND_WINDOW
         refund = rules.refund_due(now, booking.starts_at)
         if refund:
-            message = "Cancel now and you get 1 credit back."
+            message = _REFUND_YES
         else:
-            message = f"No refund: free cancellation ended {fmt_dt(deadline)}."
+            message = _REFUND_NO
         return Result.success(message, {"refund": refund, "refund_deadline": deadline})
 
 
@@ -499,3 +504,108 @@ def cancel_booking(engine: Engine, actor_id: int, booking_id: int,
         message = f"Cancelled: {fmt_dt(booking.starts_at)}. {outcome}"
         db.notify(conn, booking.member_id, "cancellation", message)
         return Result.success(message, {"refunded": refunded})
+
+
+@dataclass(frozen=True)
+class UpcomingBooking:
+    """A confirmed booking that has not started: the My bookings page can cancel it.
+
+    Rules: LU06, R5.2.
+    """
+
+    booking_id: int
+    session: SessionView
+    free_cancel_until: datetime
+
+
+@dataclass(frozen=True)
+class WaitingSpot:
+    """A student's waiting entry with their 1-based place in line.
+
+    Rules: R4.5, R4.6.
+    """
+
+    entry_id: int
+    session: SessionView
+    position: int
+
+
+@dataclass(frozen=True)
+class PastBooking:
+    """A finished or ended booking for the history list.
+
+    outcome is "attended", "no_show", "called_off", "cancelled", or None when
+    the session is over but attendance is not marked yet.
+
+    Rules: LU06, R5.2, R8.3, R9.2.
+    """
+
+    booking_id: int
+    session: SessionView
+    outcome: str | None
+    refunded: bool
+
+
+@dataclass(frozen=True)
+class MyBookings:
+    """Everything the My bookings page lists for one student.
+
+    Rules: LU06, R4.6.
+    """
+
+    upcoming: list[UpcomingBooking]
+    waiting: list[WaitingSpot]
+    past: list[PastBooking]
+
+
+def _view(row: Any) -> SessionView:
+    return SessionView(
+        id=row.id, instructor_id=row.instructor_id, instructor_name=row.instructor_name,
+        starts_at=row.starts_at, duration_min=row.duration_min, level=Level(row.level),
+        capacity=row.capacity, booked_count=row.booked_count, status=SessionStatus(row.status),
+    )
+
+
+def _outcome(row: Any) -> str | None:
+    if row.booking_status != BookingStatus.CONFIRMED:
+        return row.booking_status
+    return row.attendance
+
+
+def list_my_bookings(engine: Engine, actor_id: int, now: datetime | None = None) -> MyBookings:
+    """List a student's upcoming bookings, waitlist places and booking history.
+
+    Upcoming is confirmed and not yet started, earliest first; everything
+    else, including a booking cancelled ahead of time, is history, newest
+    first. Staff and unknown members get empty lists, since only students book.
+
+    Rules: LU06, R4.5, R4.6, R5.2.
+    """
+    now = now or utcnow()
+    empty = MyBookings([], [], [])
+    with engine.connect() as conn:
+        actor = db.get_actor(conn, actor_id)
+        if actor is None or actor.role != Role.STUDENT:
+            return empty
+
+        upcoming: list[UpcomingBooking] = []
+        past: list[PastBooking] = []
+        for row in q.member_bookings(conn, actor.id):
+            session = _view(row)
+            if row.booking_status == BookingStatus.CONFIRMED and row.starts_at > now:
+                upcoming.append(
+                    UpcomingBooking(row.booking_id, session, row.starts_at - REFUND_WINDOW)
+                )
+            else:
+                past.append(
+                    PastBooking(row.booking_id, session, _outcome(row), bool(row.refunded))
+                )
+        past.reverse()
+
+        entries = q.member_waiting_entries(conn, actor.id, now)
+        by_session = _waiting_by_session(conn, [row.id for row in entries]) if entries else {}
+        waiting = [
+            WaitingSpot(row.entry_id, _view(row), _rank(by_session[row.id], actor.id))
+            for row in entries
+        ]
+        return MyBookings(upcoming, waiting, past)
