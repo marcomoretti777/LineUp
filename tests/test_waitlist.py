@@ -372,3 +372,79 @@ def test_r2_10_raising_capacity_by_2_promotes_first_two_eligible(engine, now):
     assert _booked_count(engine, session) == 3
     assert _entry(engine, entry_broke).status == "removed"
     assert _entry(engine, entry_third).status == "waiting"
+
+
+# --- Remaining R4 boundaries (B07) ---
+
+def test_r4_1_join_at_exactly_two_hours_before_start_is_allowed(engine, now):
+    session, _ = _full_session(engine, now + timedelta(hours=2))
+    student = _student(engine)
+
+    result = _join(engine, student, session, now)
+
+    assert result.ok, result.message
+    assert result.data["position"] == 1
+
+
+def test_r4_1_join_called_off_session_is_closed(engine, now):
+    instructor = make_member(engine, role="instructor")
+    session = make_session(engine, instructor, now + timedelta(days=2), status="called_off")
+    student = _student(engine)
+
+    result = _join(engine, student, session, now)
+
+    assert not result.ok
+    assert result.code == Code.CLOSED
+    assert _entries_for(engine, student, session) == []
+
+
+def test_r4_4_cancel_at_exactly_two_hours_before_start_promotes(engine, now):
+    session, [(ana, ana_booking)] = _full_session(engine, now + timedelta(hours=2))
+    bruno = _student(engine, credits=1)
+    entry = add_waiting(engine, bruno, session, now - timedelta(hours=1))
+
+    assert _cancel(engine, ana, ana_booking, now).ok
+
+    assert _entry(engine, entry).status == "promoted"
+    assert _booked(engine, bruno, session)
+    assert _balance(engine, bruno) == 0
+    assert _booked_count(engine, session) == 1
+
+
+def test_r4_5_leave_one_minute_before_start_after_booking_cutoff_is_allowed(engine, now):
+    start = now + timedelta(days=2)
+    session, _ = _full_session(engine, start)
+    student = _student(engine)
+    entry = add_waiting(engine, student, session, now - timedelta(hours=1))
+
+    result = _leave(engine, student, entry, start - timedelta(minutes=1))
+
+    assert result.ok, result.message
+    assert _entry(engine, entry).status == "left"
+
+
+def test_r4_5_leave_twice_is_already_done(engine, now):
+    session, _ = _full_session(engine, now + timedelta(days=2))
+    student = _student(engine)
+    entry = add_waiting(engine, student, session, now - timedelta(hours=1))
+    assert _leave(engine, student, entry, now).ok
+
+    result = _leave(engine, student, entry, now)
+
+    assert not result.ok
+    assert result.code == Code.ALREADY_DONE
+    assert _entry(engine, entry).status == "left"
+
+
+def test_r4_5_leave_promoted_entry_is_already_done(engine, now):
+    session, [(ana, ana_booking)] = _full_session(engine, now + timedelta(days=2))
+    bruno = _student(engine, credits=1)
+    entry = add_waiting(engine, bruno, session, now - timedelta(hours=1))
+    assert _cancel(engine, ana, ana_booking, now).ok
+
+    result = _leave(engine, bruno, entry, now)
+
+    assert not result.ok
+    assert result.code == Code.ALREADY_DONE
+    assert _entry(engine, entry).status == "promoted"
+    assert _booked(engine, bruno, session)
