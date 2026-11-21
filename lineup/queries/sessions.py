@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy import Connection, delete, insert, select, update
 
 from lineup import schema
-from lineup.models import Level, SessionStatus, SessionView
+from lineup.models import BookingStatus, Level, SessionStatus, SessionView, WaitStatus
 
 # Only these columns may be changed by an edit; status changes go through call-off.
 _UPDATABLE = frozenset({"starts_at", "duration_min", "capacity", "level"})
@@ -100,3 +100,86 @@ def history_flags(conn: Connection, session_id: int) -> tuple[bool, bool]:
         select(w.c.id).where(w.c.session_id == session_id).limit(1)
     ).first() is not None
     return ever_booked, ever_waited
+
+
+def mark_called_off(conn: Connection, session_id: int, category: str, reason: str,
+                    now: datetime) -> bool:
+    """Mark a scheduled session called off with its category and reason; False if it wasn't scheduled.
+
+    Guarded by the status, so of two concurrent call-offs only one changes the row.
+
+    Rules: R8.2, R8.3, R8.5.
+    """
+    s = schema.surf_sessions
+    result = conn.execute(
+        update(s)
+        .where(s.c.id == session_id, s.c.status == SessionStatus.SCHEDULED.value)
+        .values(
+            status=SessionStatus.CALLED_OFF.value, call_off_category=category,
+            call_off_reason=reason, called_off_at=now, booked_count=0,
+        )
+    )
+    return result.rowcount == 1
+
+
+def confirmed_bookings(conn: Connection, session_id: int) -> list[tuple[int, int]]:
+    """Return (booking id, member id) for each confirmed booking of a session.
+
+    Rules: R8.3.
+    """
+    b = schema.bookings
+    rows = conn.execute(
+        select(b.c.id, b.c.member_id)
+        .where(b.c.session_id == session_id, b.c.status == BookingStatus.CONFIRMED.value)
+        .order_by(b.c.id)
+    ).all()
+    return [(r.id, r.member_id) for r in rows]
+
+
+def call_off_bookings(conn: Connection, session_id: int, now: datetime) -> None:
+    """Turn every confirmed booking of a session into called_off.
+
+    Rules: R8.3.
+    """
+    b = schema.bookings
+    conn.execute(
+        update(b)
+        .where(b.c.session_id == session_id, b.c.status == BookingStatus.CONFIRMED.value)
+        .values(status=BookingStatus.CALLED_OFF.value, cancelled_at=now)
+    )
+
+
+def mark_refunded(conn: Connection, booking_id: int) -> None:
+    """Flag a booking as refunded, matching its refund:<id> ledger row.
+
+    Rules: R8.3, R10.8.
+    """
+    b = schema.bookings
+    conn.execute(update(b).where(b.c.id == booking_id).values(refunded=True))
+
+
+def waiting_members(conn: Connection, session_id: int) -> list[tuple[int, int]]:
+    """Return (entry id, member id) for each waiting entry of a session.
+
+    Rules: R8.4.
+    """
+    w = schema.waitlist_entries
+    rows = conn.execute(
+        select(w.c.id, w.c.member_id)
+        .where(w.c.session_id == session_id, w.c.status == WaitStatus.WAITING.value)
+        .order_by(w.c.created_at, w.c.id)
+    ).all()
+    return [(r.id, r.member_id) for r in rows]
+
+
+def clear_waitlist(conn: Connection, session_id: int, now: datetime) -> None:
+    """Mark every waiting entry of a session cleared.
+
+    Rules: R8.4.
+    """
+    w = schema.waitlist_entries
+    conn.execute(
+        update(w)
+        .where(w.c.session_id == session_id, w.c.status == WaitStatus.WAITING.value)
+        .values(status=WaitStatus.CLEARED.value, reason="session called off", updated_at=now)
+    )
