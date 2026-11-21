@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import Connection, Engine
 
 from lineup import db
 from lineup.logic import reports as rules
-from lineup.models import Attendance, BookingStatus, Code, Result, SessionView, fill
+from lineup.models import Attendance, BookingStatus, Code, Result, Role, SessionView, fill
 from lineup.permissions import Action, require
 from lineup.queries import reports as q
 from lineup.timeutil import fmt_dt, to_local, utcnow
+
+# How far back the roster picker reaches, so recent attendance can be corrected.
+ROSTER_LOOKBACK = timedelta(days=7)
 
 ROSTER_HEADER = ("session_start", "student", "email", "level", "status", "attendance")
 
@@ -55,6 +58,28 @@ def _roster_data(conn: Connection, session: SessionView) -> dict:
         ],
     }
 
+
+def roster_sessions(engine: Engine, actor_id: int, now: datetime | None = None) -> Result:
+    """List the sessions whose roster the actor may open, from 7 days ago onwards.
+
+    Instructors get their own sessions, admins every session; called-off
+    sessions are included so their roster can still be read. data is a list
+    of SessionView, earliest start first.
+
+    Rules: section 3 (View roster), section 11 (Roster).
+    """
+    now = now or utcnow()
+    with engine.begin() as conn:
+        actor = db.get_actor(conn, actor_id)
+        if actor is None:
+            return _not_found()
+        # Listing one's own sessions is an "own" read, so the owner is the actor.
+        denied = require(actor, Action.VIEW_ROSTER, owner_id=actor.id)
+        if denied:
+            return denied
+        own = None if actor.role == Role.ADMIN else actor.id
+        sessions = q.sessions_from(conn, now - ROSTER_LOOKBACK, instructor_id=own)
+    return Result.success(f"{len(sessions)} sessions.", sessions)
 
 def roster(engine: Engine, actor_id: int, session_id: int) -> Result:
     """Return a session's booked students and waitlist for its instructor or an admin.

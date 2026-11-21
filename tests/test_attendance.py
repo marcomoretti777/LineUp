@@ -272,3 +272,47 @@ def test_r12_8_student_cannot_export_roster(engine, setup):
 
     assert not result.ok
     assert result.code == Code.FORBIDDEN
+
+
+# ---------- roster session picker ----------
+
+def _roster_sessions(engine, actor_id, now):
+    from lineup.services.attendance import roster_sessions
+
+    return roster_sessions(engine, actor_id, now=now)
+
+
+def test_roster_sessions_instructor_sees_own_from_last_7_days(engine, now):
+    tiago = make_member(engine, role="instructor")
+    other = make_member(engine, role="instructor")
+    too_old = make_session(engine, tiago, now - timedelta(days=8))
+    last_week = make_session(engine, tiago, now - timedelta(days=6))
+    called_off = make_session(engine, tiago, now - timedelta(days=2), status="called_off")
+    upcoming = make_session(engine, tiago, now + timedelta(days=3))
+    make_session(engine, other, now + timedelta(days=1))
+
+    result = _roster_sessions(engine, tiago, now)
+
+    assert result.ok
+    assert [s.id for s in result.data] == [last_week, called_off, upcoming]
+    assert too_old not in [s.id for s in result.data]
+
+
+def test_roster_sessions_admin_sees_every_instructor(engine, now):
+    admin = make_member(engine, role="admin")
+    a = make_session(engine, make_member(engine, role="instructor"), now + timedelta(hours=1))
+    b = make_session(engine, make_member(engine, role="instructor"), now - timedelta(days=1))
+
+    result = _roster_sessions(engine, admin, now)
+
+    assert result.ok
+    assert [s.id for s in result.data] == [b, a]
+
+
+def test_roster_sessions_student_is_forbidden(engine, now):
+    student = make_member(engine)
+
+    result = _roster_sessions(engine, student, now)
+
+    assert not result.ok
+    assert result.code == Code.FORBIDDEN
