@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from lineup.config import BOOKING_CUTOFF, REFUND_WINDOW
-from lineup.models import BookingStatus, Code, Result, Role, SessionStatus, fill
+from lineup.models import BookingStatus, Code, Result, Role, SessionStatus, WaitStatus, fill
 from lineup.timeutil import fmt_time
 
 
@@ -141,6 +141,29 @@ def check_can_cancel(
     if now >= starts_at:
         return Result.fail(
             Code.CLOSED, fill(Code.CLOSED, what="cancellation", time=fmt_time(starts_at))
+        )
+    return None
+
+
+def check_can_leave_waitlist(
+    *,
+    entry_status: WaitStatus,
+    now: datetime,
+    starts_at: datetime,
+) -> Result | None:
+    """Return the refusal for a student leaving a waitlist, or None when it is allowed.
+
+    Leaving stays open after the booking cutoff, right up to the start, so a
+    student who can no longer come never blocks the line.
+
+    Rules: R4.5.
+    """
+    # Already done first, so a second click after the start hears "nothing changed".
+    if entry_status != WaitStatus.WAITING:
+        return Result.fail(Code.ALREADY_DONE, fill(Code.ALREADY_DONE))
+    if now >= starts_at:
+        return Result.fail(
+            Code.CLOSED, fill(Code.CLOSED, what="the waitlist", time=fmt_time(starts_at))
         )
     return None
 
