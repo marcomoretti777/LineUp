@@ -21,10 +21,16 @@ from lineup.config import (
     MIN_LEAD,
     START_STEP_MIN,
 )
-from lineup.models import Code, Level, Result, SessionStatus, fill
+from lineup.models import CallOffCategory, Code, Level, Result, SessionStatus, fill
 from lineup.timeutil import fmt_time, local_date, to_local
 
 _LEVELS = tuple(level.value for level in Level)
+REASON_MIN, REASON_MAX = 3, 200
+CALL_OFF_LABELS = {
+    CallOffCategory.CONDITIONS: "Conditions",
+    CallOffCategory.INSTRUCTOR_UNAVAILABLE: "Instructor unavailable",
+    CallOffCategory.OTHER: "Other",
+}
 _LEAD_HOURS = int(MIN_LEAD.total_seconds() // 3600)
 # Labels used in messages; edits are keyed by the same names as the session columns.
 _FIELD_LABELS = {
@@ -96,17 +102,16 @@ def _check_level(level: Any) -> Result | None:
 
 
 def _check_latest_end(
-    starts_at: datetime, duration_min: int, latest_end: datetime | None
+    starts_at: datetime, duration_min: int, latest_end: datetime | None,
+    label: str | None = None,
 ) -> Result | None:
     if latest_end is None:
         return None
     ends_at = starts_at + timedelta(minutes=duration_min)
     if ends_at > latest_end:
-        return _invalid(
-            "End time",
-            f"{fmt_time(ends_at)} is after {fmt_time(latest_end)}",
-            f"ending by {fmt_time(latest_end)}",
-        )
+        # The label says which limit applied (sunset or the 17:00 fallback), as R2.7 asks.
+        limit = label or fmt_time(latest_end)
+        return _invalid("End time", f"{fmt_time(ends_at)} is after {limit}", f"ending by {limit}")
     return None
 
 
@@ -134,6 +139,7 @@ def validate_new_session(
     capacity: Any,
     level: Any,
     latest_end: datetime | None = None,
+    latest_end_label: str | None = None,
 ) -> Result | None:
     """Return the refusal for a new session's fields, or None when every field is allowed.
 
@@ -149,7 +155,7 @@ def validate_new_session(
     if refusal:
         return refusal
     # Last, because the end time is only meaningful once the duration is valid.
-    return _check_latest_end(starts_at, duration_min, latest_end)
+    return _check_latest_end(starts_at, duration_min, latest_end, latest_end_label)
 
 
 def _overlaps(a_start: datetime, a_min: int, b_start: datetime, b_min: int) -> bool:
@@ -179,6 +185,7 @@ def check_edit(
     current: Mapping[str, Any],
     changes: Mapping[str, Any],
     latest_end: datetime | None = None,
+    latest_end_label: str | None = None,
 ) -> Result | None:
     """Return the refusal for editing a session, or None when the changes are allowed.
 
@@ -216,7 +223,9 @@ def check_edit(
     if refusal:
         return refusal
     if time_changed:
-        return _check_latest_end(merged["starts_at"], merged["duration_min"], latest_end)
+        return _check_latest_end(
+            merged["starts_at"], merged["duration_min"], latest_end, latest_end_label
+        )
     return None
 
 
@@ -240,5 +249,24 @@ def check_delete(
             "Session",
             "someone has booked or joined its waitlist",
             "deleting only sessions nobody booked or waited for; call it off instead",
+        )
+    return None
+
+
+def check_call_off_input(category: Any, reason: Any) -> Result | None:
+    """Return the refusal for a call-off's category and reason, or None when both are allowed.
+
+    Rules: R8.2.
+    """
+    if category not in {c.value for c in CallOffCategory}:
+        return _invalid(
+            "Category", f"{category!r} is not a call-off category",
+            ", ".join(CALL_OFF_LABELS.values()),
+        )
+    # Counted after trimming, so padding with spaces can't pass a too-short reason.
+    length = len((reason or "").strip())
+    if not REASON_MIN <= length <= REASON_MAX:
+        return _invalid(
+            "Reason", f"it has {length} characters", f"{REASON_MIN} to {REASON_MAX} characters"
         )
     return None
