@@ -128,10 +128,11 @@ def _note(mode: str, fetched_at: datetime | None, fetched: bool, failed: bool,
     if fetched_at is None:
         return UNAVAILABLE_NOTE
     clock = fmt_time(fetched_at)
-    if fetched or (not failed and not _is_due(fetched_at, now)):
-        return f"Forecast updated {clock}"
+    # Checked first: with updates paused even recent data must not read as live.
     if mode == SAVED_ONLY:
         return f"Forecast from {clock} (saved data, live updates paused)"
+    if fetched or (not failed and not _is_due(fetched_at, now)):
+        return f"Forecast updated {clock}"
     return f"Forecast from {clock} (live update failed)"
 
 
