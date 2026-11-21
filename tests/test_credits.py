@@ -253,3 +253,32 @@ def test_my_requests_lists_own_only(engine, now):
     assert result.ok
     assert [r["id"] for r in result.data] == [mine]
     assert result.data[0]["status"] == "pending"
+
+
+def test_decided_requests_admin_newest_decision_first(engine, now):
+    admin = make_member(engine, role="admin")
+    ana, bruno, carla, diogo = (make_member(engine) for _ in range(4))
+    withdrawn = make_request(engine, carla, now - timedelta(hours=3))
+    credits.withdraw_request(engine, carla, withdrawn, now=now - timedelta(hours=2))
+    approved = make_request(engine, ana, now)
+    rejected = make_request(engine, bruno, now)
+    make_request(engine, diogo, now)  # still pending: not history
+    credits.approve_request(engine, admin, approved, now=now + timedelta(hours=1))
+    credits.reject_request(engine, admin, rejected, "Payment not found", now=now + timedelta(hours=2))
+
+    result = credits.decided_requests(engine, admin)
+
+    assert result.ok
+    assert [(r["id"], r["status"]) for r in result.data] == [
+        (rejected, "rejected"), (approved, "approved"), (withdrawn, "withdrawn"),
+    ]
+    assert result.data[0]["decision_note"] == "Payment not found"
+
+
+def test_decided_requests_student_forbidden(engine):
+    student = make_member(engine)
+
+    result = credits.decided_requests(engine, student)
+
+    assert not result.ok
+    assert result.code == Code.FORBIDDEN

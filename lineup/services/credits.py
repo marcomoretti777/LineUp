@@ -18,6 +18,8 @@ from lineup.queries import credits as q
 from lineup.timeutil import utcnow
 
 NOTIFY_KIND = "credits"
+# The admin history shows recent decisions; older ones are in the requests CSV.
+HISTORY_LIMIT = 50
 
 
 def _not_found() -> Result:
@@ -213,6 +215,21 @@ def pending_requests(engine: Engine, actor_id: int) -> Result:
         rows = q.pending_with_members(conn)
     return Result.success(f"{len(rows)} pending.", [_request_dict(r) for r in rows])
 
+
+def decided_requests(engine: Engine, actor_id: int, limit: int = HISTORY_LIMIT) -> Result:
+    """List the most recent decided credit requests, newest decision first, for an admin.
+
+    Rules: R10.4, R10.5, section 3 (DECIDE_CREDITS).
+    """
+    with engine.connect() as conn:
+        actor = db.get_actor(conn, actor_id)
+        if actor is None:
+            return _not_found()
+        denied = require(actor, Action.DECIDE_CREDITS)
+        if denied:
+            return denied
+        rows = q.decided_with_members(conn, limit)
+    return Result.success(f"{len(rows)} decided.", [_request_dict(r) for r in rows])
 
 def my_requests(engine: Engine, actor_id: int) -> Result:
     """List the actor's own credit requests, newest first.
