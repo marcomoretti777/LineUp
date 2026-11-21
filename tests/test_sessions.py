@@ -267,3 +267,90 @@ def test_list_my_sessions_includes_late_on_last_day(engine, now):
     result = svc.list_my_sessions(engine, instructor, now=now)
     assert result.ok, result.message
     assert [s.id for s in result.data] == [late]
+
+
+# --- R2.7 end by sunset, or by 17:00 without sunset data -------------------
+
+def _save_sunset(engine, day, sunset_utc, fetched_at):
+    with engine.begin() as conn:
+        conn.execute(schema.forecast_days.insert().values(
+            day=day, sunset_utc=sunset_utc, fetched_at=fetched_at,
+        ))
+
+
+def test_r2_7_create_ending_at_sunset_ok(engine, now):
+    instructor = make_member(engine, role="instructor")
+    _save_sunset(engine, TOMORROW, datetime(2026, 11, 21, 17, 15), now)
+    result = _create(engine, instructor, now, start=time(15, 45), duration_min=90)
+    assert result.ok, result.message
+
+
+def test_r2_7_create_ending_after_sunset_invalid(engine, now):
+    instructor = make_member(engine, role="instructor")
+    _save_sunset(engine, TOMORROW, datetime(2026, 11, 21, 17, 15), now)
+    result = _create(engine, instructor, now, start=time(16, 0), duration_min=90)
+    assert result.code == Code.INVALID
+    assert "sunset" in result.message
+    assert "17:15" in result.message
+    assert _session_count(engine) == 0
+
+
+def test_r2_7_no_sunset_data_ending_at_1700_ok(engine, now):
+    instructor = make_member(engine, role="instructor")
+    result = _create(engine, instructor, now, start=time(15, 30), duration_min=90)
+    assert result.ok, result.message
+
+
+def test_r2_7_no_sunset_data_ending_after_1700_invalid(engine, now):
+    instructor = make_member(engine, role="instructor")
+    result = _create(engine, instructor, now, start=time(15, 45), duration_min=90)
+    assert result.code == Code.INVALID
+    assert "17:00" in result.message
+    assert "no sunset data" in result.message
+    assert _session_count(engine) == 0
+
+
+def test_r2_7_edit_moving_end_after_sunset_invalid(engine, now):
+    instructor = make_member(engine, role="instructor")
+    _save_sunset(engine, TOMORROW, datetime(2026, 11, 21, 17, 15), now)
+    sid = _create(engine, instructor, now).data["session_id"]
+    result = svc.edit_session(engine, instructor, sid, {"start_time": time(16, 0)}, now=now)
+    assert result.code == Code.INVALID
+    assert "sunset" in result.message
+    assert _row(engine, sid).starts_at == datetime(2026, 11, 21, 10, 0)
+
+
+def test_r2_7_capacity_only_edit_is_not_rechecked_against_latest_end(engine, now):
+    instructor = make_member(engine, role="instructor")
+    # Inserted directly: it ends at 17:30, past the 17:00 fallback limit.
+    sid = make_session(engine, instructor, datetime(2026, 11, 21, 16, 0), duration_min=90)
+    result = svc.edit_session(engine, instructor, sid, {"capacity": 6}, now=now)
+    assert result.ok, result.message
+    assert _row(engine, sid).capacity == 6
+
+
+# --- R2.10 end to end with the real waitlist promotion ---------------------
+
+def test_r2_10_two_places_added_books_both_waiting_students(engine, now):
+    from lineup import db
+
+    instructor = make_member(engine, role="instructor")
+    sid = make_session(engine, instructor, datetime(2026, 11, 21, 10, 0), capacity=2)
+    _booked(engine, sid, n=2)
+    waiting = [make_member(engine), make_member(engine)]
+    for i, member in enumerate(waiting):
+        give_credits(engine, member, 1)
+        add_waiting(engine, member, sid, datetime(2026, 11, 20, 8, i))
+
+    result = svc.edit_session(engine, instructor, sid, {"capacity": 4}, now=now)
+
+    assert result.ok, result.message
+    b = schema.bookings
+    with engine.connect() as conn:
+        booked = conn.execute(
+            select(b.c.member_id).where(b.c.session_id == sid, b.c.status == "confirmed")
+        ).scalars().all()
+        balances = [db.ledger_balance(conn, member) for member in waiting]
+    assert set(waiting) <= set(booked)
+    assert balances == [0, 0]
+    assert _row(engine, sid).booked_count == 4
