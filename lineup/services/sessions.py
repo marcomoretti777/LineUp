@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy import Connection, Engine
 
 from lineup import db
-from lineup.config import DURATIONS, MAX_DAYS_AHEAD
+from lineup.config import DURATIONS, FALLBACK_LATEST_END, MAX_DAYS_AHEAD
 from lineup.logic import sessions as rules
 from lineup.models import (
     MESSAGES,
@@ -31,6 +31,7 @@ from lineup.models import (
     fill,
 )
 from lineup.permissions import Action, require
+from lineup.queries import forecast as forecast_q
 from lineup.queries import sessions as q
 
 # Imported as modules so tests can replace promote_waitlist with a spy, and so
@@ -65,6 +66,16 @@ def _clash(conn: Connection, instructor_id: int, starts_at: datetime, duration_m
     return None
 
 
+def _latest_end(conn: Connection, day: date) -> tuple[datetime, str]:
+    # Read on the caller's connection, so the limit and the write share one
+    # transaction; forecast.sunset_for would open a second connection.
+    sunset = forecast_q.load_sunset(conn, day)
+    if sunset is not None:
+        return sunset, f"sunset ({fmt_time(sunset)})"
+    fallback = from_local(day, FALLBACK_LATEST_END)
+    return fallback, f"{fmt_time(fallback)} (no sunset data)"
+
+
 def _load_owned(conn: Connection, actor_id: int,
                 session_id: int) -> tuple[SessionView | None, Result | None]:
     actor = db.get_actor(conn, actor_id)
@@ -83,7 +94,7 @@ def create_session(engine: Engine, actor_id: int, day: date, start_time: time,
                    now: datetime | None = None) -> Result:
     """Create a scheduled session for the acting instructor from a Lisbon date and start time.
 
-    Rules: R2.1, R2.2, R2.3, R2.4, R2.5, R2.6, section 3 (MANAGE_OWN_SESSIONS).
+    Rules: R2.1, R2.2, R2.3, R2.4, R2.5, R2.6, R2.7, section 3 (MANAGE_OWN_SESSIONS).
     """
     now = now or utcnow()
     with engine.begin() as conn:
@@ -95,10 +106,10 @@ def create_session(engine: Engine, actor_id: int, day: date, start_time: time,
             return denied
 
         starts_at = from_local(day, start_time)
-        # The sunset limit (R2.7) is wired in task S08.
+        latest_end, limit = _latest_end(conn, day)
         refusal = rules.validate_new_session(
             now=now, starts_at=starts_at, duration_min=duration_min,
-            capacity=capacity, level=level, latest_end=None,
+            capacity=capacity, level=level, latest_end=latest_end, latest_end_label=limit,
         ) or _clash(conn, actor.id, starts_at, duration_min)
         if refusal:
             return refusal
@@ -114,7 +125,7 @@ def edit_session(engine: Engine, actor_id: int, session_id: int, changes: Mappin
                  now: datetime | None = None) -> Result:
     """Change an instructor's own session; keys are day, start_time, duration_min, capacity, level.
 
-    Rules: R2.1-R2.6, R2.8, R2.9, R2.10, section 3 (MANAGE_OWN_SESSIONS).
+    Rules: R2.1-R2.7, R2.8, R2.9, R2.10, section 3 (MANAGE_OWN_SESSIONS).
     """
     now = now or utcnow()
     with engine.begin() as conn:
@@ -140,10 +151,15 @@ def edit_session(engine: Engine, actor_id: int, session_id: int, changes: Mappin
                 changes.get("day", local.date()), changes.get("start_time", local.time())
             )
 
+        # check_edit applies the limit only when the time changes, so a
+        # capacity edit is never refused for an end past sunset.
+        latest_end, limit = _latest_end(
+            conn, local_date(proposed.get("starts_at", session.starts_at))
+        )
         refusal = rules.check_edit(
             now=now, starts_at=session.starts_at, status=session.status,
             confirmed_count=session.booked_count, current=current, changes=proposed,
-            latest_end=None,
+            latest_end=latest_end, latest_end_label=limit,
         )
         if refusal:
             return refusal
