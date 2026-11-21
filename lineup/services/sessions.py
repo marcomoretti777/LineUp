@@ -40,13 +40,10 @@ from lineup.services import booking, forecast
 from lineup.timeutil import fmt_dt, fmt_time, from_local, local_date, to_local, utcnow
 
 _EDITABLE = ("day", "start_time", "duration_min", "capacity", "level")
-REASON_MIN, REASON_MAX = 3, 200
+# Re-exported because the My sessions page reads sessions.REASON_MAX.
+REASON_MIN, REASON_MAX = rules.REASON_MIN, rules.REASON_MAX
 DECISION_WINDOW = timedelta(hours=72)
-_CATEGORY_LABELS = {
-    CallOffCategory.CONDITIONS: "Conditions",
-    CallOffCategory.INSTRUCTOR_UNAVAILABLE: "Instructor unavailable",
-    CallOffCategory.OTHER: "Other",
-}
+_CATEGORY_LABELS = rules.CALL_OFF_LABELS
 _NEEDS_DECISION = (Label.NO_GO, Label.UNKNOWN)
 
 
@@ -223,22 +220,6 @@ def list_my_sessions(engine: Engine, actor_id: int, now: datetime | None = None)
         return Result.success(f"{len(sessions)} upcoming session(s).", sessions)
 
 
-def _check_call_off_input(category: str, reason: str) -> Result | None:
-    # Kept here because this task may not change lineup/logic/sessions.py.
-    if category not in {c.value for c in CallOffCategory}:
-        return Result.fail(Code.INVALID, fill(
-            Code.INVALID, field="Category", problem=f"{category!r} is not a call-off category",
-            allowed=", ".join(_CATEGORY_LABELS.values()),
-        ))
-    length = len(reason)
-    if not REASON_MIN <= length <= REASON_MAX:
-        return Result.fail(Code.INVALID, fill(
-            Code.INVALID, field="Reason", problem=f"it has {length} characters",
-            allowed=f"{REASON_MIN} to {REASON_MAX} characters",
-        ))
-    return None
-
-
 def call_off(engine: Engine, actor_id: int, session_id: int, category: str, reason: str,
              now: datetime | None = None) -> Result:
     """Call a session off for everyone: refund every booking once, clear the waitlist, notify all.
@@ -265,7 +246,7 @@ def call_off(engine: Engine, actor_id: int, session_id: int, category: str, reas
             return Result.fail(Code.CLOSED, fill(
                 Code.CLOSED, what="calling off", time=fmt_time(session.ends_at),
             ))
-        refusal = _check_call_off_input(category, reason)
+        refusal = rules.check_call_off_input(category, reason)
         if refusal:
             return refusal
 

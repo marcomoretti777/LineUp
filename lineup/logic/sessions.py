@@ -21,10 +21,16 @@ from lineup.config import (
     MIN_LEAD,
     START_STEP_MIN,
 )
-from lineup.models import Code, Level, Result, SessionStatus, fill
+from lineup.models import CallOffCategory, Code, Level, Result, SessionStatus, fill
 from lineup.timeutil import fmt_time, local_date, to_local
 
 _LEVELS = tuple(level.value for level in Level)
+REASON_MIN, REASON_MAX = 3, 200
+CALL_OFF_LABELS = {
+    CallOffCategory.CONDITIONS: "Conditions",
+    CallOffCategory.INSTRUCTOR_UNAVAILABLE: "Instructor unavailable",
+    CallOffCategory.OTHER: "Other",
+}
 _LEAD_HOURS = int(MIN_LEAD.total_seconds() // 3600)
 # Labels used in messages; edits are keyed by the same names as the session columns.
 _FIELD_LABELS = {
@@ -243,5 +249,24 @@ def check_delete(
             "Session",
             "someone has booked or joined its waitlist",
             "deleting only sessions nobody booked or waited for; call it off instead",
+        )
+    return None
+
+
+def check_call_off_input(category: Any, reason: Any) -> Result | None:
+    """Return the refusal for a call-off's category and reason, or None when both are allowed.
+
+    Rules: R8.2.
+    """
+    if category not in {c.value for c in CallOffCategory}:
+        return _invalid(
+            "Category", f"{category!r} is not a call-off category",
+            ", ".join(CALL_OFF_LABELS.values()),
+        )
+    # Counted after trimming, so padding with spaces can't pass a too-short reason.
+    length = len((reason or "").strip())
+    if not REASON_MIN <= length <= REASON_MAX:
+        return _invalid(
+            "Reason", f"it has {length} characters", f"{REASON_MIN} to {REASON_MAX} characters"
         )
     return None
