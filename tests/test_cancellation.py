@@ -189,3 +189,28 @@ def test_r5_1_cancel_preview_someone_elses_booking_is_forbidden(engine, now):
 
     assert not result.ok
     assert result.code == Code.FORBIDDEN
+
+
+# --- Remaining R5 boundaries (B07) ---
+
+def test_r5_1_cancel_one_minute_before_start_is_allowed_without_refund(engine, now):
+    start = now + timedelta(minutes=1)
+    student, session, booking = _setup(engine, start)
+
+    result = _cancel(engine, student, booking, now)
+
+    assert result.ok, result.message
+    assert result.data == {"refunded": False}
+    assert _booking_row(engine, booking).status == "cancelled"
+    assert _balance(engine, student) == 0
+    assert _booked_count(engine, session) == 0
+
+
+def test_r5_4_cancel_preview_of_cancelled_booking_is_already_done(engine, now):
+    student, _, booking = _setup(engine, now + timedelta(days=2))
+    assert _cancel(engine, student, booking, now).ok
+
+    result = _preview(engine, student, booking, now)
+
+    assert not result.ok
+    assert result.code == Code.ALREADY_DONE

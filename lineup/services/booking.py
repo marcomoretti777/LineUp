@@ -29,7 +29,7 @@ from lineup.models import (
 )
 from lineup.permissions import Action, require
 from lineup.queries import booking as q
-from lineup.timeutil import fmt_dt, fmt_time, utcnow
+from lineup.timeutil import fmt_dt, utcnow
 
 
 # Short reasons stored on removed entries; other refusals store their code.
@@ -226,13 +226,11 @@ def leave_waitlist(engine: Engine, actor_id: int, entry_id: int,
         denied = require(actor, Action.LEAVE_WAITLIST, owner_id=entry.member_id)
         if denied:
             return denied
-        if entry.status != WaitStatus.WAITING:
-            return Result.fail(Code.ALREADY_DONE, fill(Code.ALREADY_DONE))
-        if now >= entry.starts_at:
-            return Result.fail(
-                Code.CLOSED,
-                fill(Code.CLOSED, what="the waitlist", time=fmt_time(entry.starts_at)),
-            )
+        refused = rules.check_can_leave_waitlist(
+            entry_status=WaitStatus(entry.status), now=now, starts_at=entry.starts_at
+        )
+        if refused:
+            return refused
         # The status read above may be stale; only this guarded UPDATE decides.
         if not q.leave_entry(conn, entry.id, now):
             return Result.fail(Code.ALREADY_DONE, fill(Code.ALREADY_DONE))
