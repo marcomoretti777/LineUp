@@ -258,3 +258,40 @@ def test_r8_decision_needed_student_is_forbidden(engine, now):
     result = decision_needed(engine, student, now=now, conditions=lambda *a, **k: {})
 
     assert result.code == Code.FORBIDDEN
+
+
+def test_r8_3_cancelled_booking_is_not_refunded_again(engine, now):
+    from lineup.services.booking import cancel_booking
+
+    instructor, session, members, bookings = _booked_session(engine, now, students=2)
+    # Two days ahead, so this cancellation is already refunded (R5.2).
+    assert cancel_booking(engine, members[0], bookings[0], now=now).ok
+
+    result = _call_off(engine, instructor, session, now)
+
+    assert result.ok, result.message
+    assert result.data["refunded"] == 1
+    ledger = schema.credit_ledger
+    with engine.connect() as conn:
+        refs = conn.execute(
+            select(ledger.c.ref).where(ledger.c.kind == "refund")
+        ).scalars().all()
+    assert sorted(refs) == sorted(f"refund:{b}" for b in bookings)
+
+
+def test_r8_1_unknown_session_is_not_found_for_staff_and_forbidden_for_students(engine, now):
+    instructor = make_member(engine, role="instructor")
+    student = make_member(engine)
+
+    assert _call_off(engine, instructor, 9999, now).code == Code.NOT_FOUND
+    assert _call_off(engine, student, 9999, now).code == Code.FORBIDDEN
+
+
+def test_r8_2_reason_too_short_after_trimming_is_invalid(engine, now):
+    instructor = make_member(engine, role="instructor")
+    session = make_session(engine, instructor, now + timedelta(days=1))
+
+    result = _call_off(engine, instructor, session, now, reason="  ab  ")
+
+    assert result.code == Code.INVALID
+    assert _session_row(engine, session).status == "scheduled"

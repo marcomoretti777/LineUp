@@ -353,3 +353,44 @@ def test_r2_8_closed_message_comes_from_catalogue(rules, now):
     result = rules.check_edit(**_edit(now, status=SessionStatus.CALLED_OFF))
     _assert_refused(result, Code.CLOSED)
     assert result.message.startswith(MESSAGES[Code.CLOSED].split("{")[0])
+
+
+# --- R2.7 the message names the limit that applied ---
+
+
+def test_r2_7_message_names_the_limit_that_applied(rules, now):
+    result = rules.validate_new_session(
+        **_new(now, latest_end=_local(11, 0), latest_end_label="17:00 (no sunset data)")
+    )
+    _assert_refused(result, Code.INVALID)
+    assert "17:00 (no sunset data)" in result.message
+
+
+# --- R8.2 call-off category and reason, as a pure rule ---
+
+
+@pytest.mark.parametrize("category", ["conditions", "instructor_unavailable", "other"])
+def test_r8_2_every_category_is_allowed(rules, category):
+    assert rules.check_call_off_input(category, "Big swell") is None
+
+
+@pytest.mark.parametrize("category", ["weather", "", None])
+def test_r8_2_unknown_or_missing_category_is_invalid(rules, category):
+    result = rules.check_call_off_input(category, "Big swell")
+    _assert_refused(result, Code.INVALID)
+    assert result.message.startswith("Category")
+
+
+@pytest.mark.parametrize("length, ok", [(2, False), (3, True), (200, True), (201, False)])
+def test_r8_2_reason_length_bounds(rules, length, ok):
+    result = rules.check_call_off_input("conditions", "x" * length)
+    if ok:
+        assert result is None
+    else:
+        _assert_refused(result, Code.INVALID)
+        assert result.message.startswith("Reason")
+
+
+def test_r8_2_reason_is_trimmed_before_counting(rules):
+    _assert_refused(rules.check_call_off_input("conditions", "  ab  "), Code.INVALID)
+    assert rules.check_call_off_input("conditions", "  abc  ") is None

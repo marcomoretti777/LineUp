@@ -293,3 +293,80 @@ def test_r2_7_sunset_for_returns_saved_sunset_or_none(engine, now):
 
     assert forecast.sunset_for(engine, date(2026, 11, 21)) == datetime(2026, 11, 21, 17, 20)
     assert forecast.sunset_for(engine, date(2026, 12, 25)) is None
+
+
+def test_r7_6_saved_only_mode_says_paused_even_with_recent_data(engine, now):
+    save_forecast(engine, fetched_at=now - timedelta(minutes=30))
+    set_setting_row(engine, "forecast_mode", "saved_only", now)
+    fake = FakeFetch(result=small_data(FIRST_HOUR))
+
+    bundle = forecast.get_forecast(engine, now=now, fetch=fake)
+
+    assert fake.calls == 0
+    assert bundle.note == "Forecast from 08:30 (saved data, live updates paused)"
+
+
+def test_r7_4_one_feed_failing_saves_nothing_and_uses_saved_data(engine, now):
+    saved_at = datetime(2026, 11, 20, 7, 12)
+    save_forecast(engine, fetched_at=saved_at)
+    marine = (FIXTURES / "marine_ok.json").read_text()
+    error = (FIXTURES / "error_400.json").read_text()
+
+    class Response:
+        def __init__(self, status_code, text):
+            self.status_code, self.text = status_code, text
+
+        def json(self):
+            return json.loads(self.text)
+
+    def get(url, **kwargs):
+        # Waves answer normally; wind and sunset come back as HTTP 400.
+        return Response(200, marine) if "marine" in url else Response(400, error)
+
+    bundle = forecast.get_forecast(engine, now=now, fetch=lambda: openmeteo.fetch_all(get=get))
+
+    with engine.connect() as conn:
+        hours = conn.execute(select(schema.forecast_hours)).all()
+    assert bundle.failed is True
+    assert bundle.note == "Forecast from 07:12 (live update failed)"
+    assert len(hours) == 72
+    assert {row.fetched_at for row in hours} == {saved_at}
+    assert "400" in settings(engine)["last_forecast_error"]
+
+
+def _book(engine, session_id, now):
+    from conftest import give_credits
+
+    student = make_member(engine)
+    give_credits(engine, student, 1)
+    from lineup.services import booking
+
+    return booking.book(engine, student, session_id, now=now)
+
+
+def test_r6_5_unknown_label_never_blocks_booking(engine, now):
+    instructor = make_member(engine, role="instructor")
+    session_id = make_session(engine, instructor, datetime(2026, 11, 21, 10, 0))
+    fake = FakeFetch(error=ForecastError("timeout"))
+
+    conditions = forecast.conditions_for_sessions(
+        engine, sessions_view(engine, session_id), now=now, fetch=fake
+    )
+    result = _book(engine, session_id, now)
+
+    assert conditions[session_id].label == Label.UNKNOWN
+    assert result.ok, result.message
+
+
+def test_r6_5_no_go_label_never_blocks_booking(engine, now):
+    save_forecast(engine, fetched_at=now - timedelta(minutes=10), wave=2.5, wind=10.0)
+    instructor = make_member(engine, role="instructor")
+    session_id = make_session(engine, instructor, datetime(2026, 11, 21, 10, 0))
+
+    conditions = forecast.conditions_for_sessions(
+        engine, sessions_view(engine, session_id), now=now, fetch=FakeFetch()
+    )
+    result = _book(engine, session_id, now)
+
+    assert conditions[session_id].label == Label.NO_GO
+    assert result.ok, result.message
