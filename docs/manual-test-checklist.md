@@ -4,7 +4,7 @@ The automated suite runs against SQLite with no network, so it cannot prove the 
 behaves the same. This checklist walks every acceptance scenario of spec section 6 on the live
 app.
 
-Run it on **LIVE_URL_PENDING**. Passwords for the demo accounts are shared privately and are never
+Run it on **https://lineup-ky7mljaxwqy8hjn7gelc9v.streamlit.app**. Passwords for the demo accounts are shared privately and are never
 written here. Use a private browser window so a stale session does not hide a problem, and tick
 each step only when you have seen the stated result with your own eyes.
 
@@ -23,7 +23,7 @@ you to type RESET first.
 
 ## 0. The one check that must pass before any other
 
-**1. Open LIVE_URL_PENDING in a private window, signed out.**
+**1. Open https://lineup-ky7mljaxwqy8hjn7gelc9v.streamlit.app in a private window, signed out.**
 You must see the **Log in / Sign up** page.
 
 **If you see a red "Local demo mode" banner or a "Sign in as" member picker, stop and tell the
