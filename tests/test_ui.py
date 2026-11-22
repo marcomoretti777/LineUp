@@ -16,7 +16,7 @@ import pytest
 from lineup import ui
 from lineup.models import Code, Condition, Label, Result
 
-RECORDED = ("success", "error", "toast", "markdown", "caption")
+RECORDED = ("success", "error", "toast", "markdown", "caption", "title", "info")
 
 
 @pytest.fixture
@@ -247,3 +247,144 @@ def test_footer_credit_names_open_meteo_and_links_the_licence(shown):
     caption = only_message(shown, "caption")
     assert "Open-Meteo.com" in caption
     assert "https://open-meteo.com/en/licence" in caption
+
+
+# =========================================================================
+# F11: the shared visual components.
+# Behaviour is presentation only; these pin down the parts that carry a
+# rule — escaping member text, naming every state in words, and holding
+# animation still for anyone who asked for less motion.
+# =========================================================================
+
+CHIP_KINDS = ("neutral", "info", "good", "warn", "bad")
+
+
+# --- chip() ----------------------------------------------------------------
+
+@pytest.mark.parametrize("kind", CHIP_KINDS)
+def test_chip_markup_renders_for_every_kind(kind):
+    markup = ui.chip_markup("Booked", kind)
+    assert "Booked" in markup
+    assert "-background[" in markup
+
+
+@pytest.mark.parametrize("kind", CHIP_KINDS)
+def test_chip_markup_uses_a_distinct_colour_per_kind(kind):
+    colour = ui.CHIP_COLOURS[kind]
+    assert f":{colour}-background[" in ui.chip_markup("Booked", kind)
+
+
+def test_chip_colours_cover_exactly_the_documented_kinds():
+    assert set(ui.CHIP_COLOURS) == set(CHIP_KINDS)
+
+
+def test_chip_markup_escapes_member_text():
+    # A chip may carry a name or a note, so it goes through plain().
+    assert "\\*" in ui.chip_markup("*Ana*", "info")
+
+
+def test_chip_markup_keeps_a_waitlist_number_readable():
+    # plain() escapes "#", which Markdown then renders as a plain hash.
+    assert "Waitlist \\#2" in ui.chip_markup("Waitlist #2", "info")
+
+
+def test_chip_markup_falls_back_to_neutral_for_an_unknown_kind():
+    assert f":{ui.CHIP_COLOURS['neutral']}-background[" in ui.chip_markup("Odd", "nonsense")
+
+
+def test_chip_renders_through_streamlit(shown):
+    ui.chip("Attended", "good")
+    assert "Attended" in only_message(shown, "markdown")
+
+
+# --- page_header() ---------------------------------------------------------
+
+def test_page_header_shows_the_title(shown):
+    ui.page_header("Sessions")
+    assert only_message(shown, "title") == "Sessions"
+    assert shown["caption"] == []
+
+
+def test_page_header_shows_an_optional_subtitle(shown):
+    ui.page_header("Sessions", "The next 14 days")
+    assert only_message(shown, "caption") == "The next 14 days"
+
+
+def test_page_header_escapes_a_subtitle(shown):
+    ui.page_header("Members", "*Ana*")
+    assert only_message(shown, "caption") == "\\*Ana\\*"
+
+
+# --- empty_state() ---------------------------------------------------------
+
+def test_empty_state_shows_the_message_it_is_given(shown):
+    # The wording stays the catalogue's; the helper only frames it.
+    ui.empty_state("No sessions in the next 14 days yet.")
+    assert only_message(shown, "info") == "No sessions in the next 14 days yet."
+
+
+def test_empty_state_escapes_member_text(shown):
+    ui.empty_state("*nothing*")
+    assert only_message(shown, "info") == "\\*nothing\\*"
+
+
+# --- the stylesheet --------------------------------------------------------
+
+def test_styles_are_a_constant_with_no_placeholder():
+    # No user text ever enters the stylesheet, so it must not be a template.
+    assert isinstance(ui.STYLES, str) and ui.STYLES
+    assert "{}" not in ui.STYLES
+    assert "%s" not in ui.STYLES
+
+
+def test_styles_hold_the_shaka_animation_still_under_reduced_motion():
+    assert "prefers-reduced-motion" in ui.STYLES
+    # The rule must actually switch the animation off, not merely mention it.
+    after = ui.STYLES.split("prefers-reduced-motion", 1)[1]
+    assert "animation" in after
+
+
+def test_styles_define_the_shaka_animation():
+    assert "@keyframes" in ui.STYLES
+
+
+def test_wave_svg_is_an_inline_svg_with_no_remote_reference():
+    assert ui.WAVE_SVG.lstrip().startswith("<svg")
+    assert "http://" not in ui.WAVE_SVG
+    assert "https://" not in ui.WAVE_SVG
+
+
+# --- loading() -------------------------------------------------------------
+
+def test_loading_wraps_a_spinner_and_yields(monkeypatch):
+    seen = []
+
+    class FakeSpinner:
+        def __init__(self, text):
+            seen.append(text)
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(ui.st, "spinner", FakeSpinner)
+    with ui.loading():
+        pass
+    assert seen and "addling" in seen[0]
+
+
+def test_loading_accepts_its_own_text(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ui.st, "spinner", lambda text: _NullContext(seen, text))
+    with ui.loading("Reading the forecast"):
+        pass
+    assert seen == ["Reading the forecast"]
+
+
+class _NullContext:
+    def __init__(self, seen, text):
+        seen.append(text)
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        return False
