@@ -1,6 +1,6 @@
 # LineUp: surf session booking for a campus surf club
 
-Live app: LIVE_URL_PENDING
+Live app: https://lineup-ky7mljaxwqy8hjn7gelc9v.streamlit.app
 
 Students book surf sessions with prepaid credits, instructors run and call off sessions, and admins approve payments and read reports. Live wave and wind forecasts from Open-Meteo label every session Go, Marginal, No-go or Unknown.
 
@@ -15,7 +15,7 @@ Students book surf sessions with prepaid credits, instructors run and call off s
 
 ## Try it
 
-Open LIVE_URL_PENDING and log in with one of the demo accounts below. Their passwords are shared privately with the teaching staff and are never written in this repository.
+Open https://lineup-ky7mljaxwqy8hjn7gelc9v.streamlit.app and log in with one of the demo accounts below. Their passwords are shared privately with the teaching staff and are never written in this repository.
 
 | Role | Name | Email |
 | --- | --- | --- |
