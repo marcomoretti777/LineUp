@@ -182,3 +182,20 @@ def test_demo_picker_lists_members_without_an_actor(engine):
     listed = members.list_demo_members(engine)
     assert [name for _, name, _ in listed] == ["Ana Silva", "Rita Admin"]
     assert [role for _, _, role in listed] == ["student", "admin"]
+
+
+def test_list_members_can_be_searched_by_name_or_email(engine):
+    admin = make_member(engine, role="admin", name="Marta Silva",
+                        email="lineup.admin@novasbe.pt")
+    make_member(engine, role="student", name="Ana Martins",
+                email="lineup.ana@novasbe.pt")
+    make_member(engine, role="student", name="Bruno Lopes",
+                email="lineup.bruno@novasbe.pt")
+
+    by_name = members.list_members(engine, admin, search="ana")
+    assert [m["full_name"] for m in by_name.data] == ["Ana Martins"]
+
+    by_email = members.list_members(engine, admin, search="BRUNO@")
+    assert [m["full_name"] for m in by_email.data] == ["Bruno Lopes"]
+
+    assert len(members.list_members(engine, admin, search="   ").data) == 3
