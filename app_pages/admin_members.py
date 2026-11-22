@@ -14,9 +14,10 @@ from lineup.models import Level, Role
 from lineup.services import members
 
 engine = ui.get_engine()
+ui.inject_styles()
 actor = ui.current_actor(engine)
 
-st.title("Members")
+ui.page_header("Members", "Roles, levels and credit balances.")
 
 search = st.text_input("Search by name or email", key="members_search",
                        placeholder="Ana, or lineup.ana@novasbe.pt")
@@ -31,7 +32,7 @@ if not listed.ok:
 
 people = listed.data
 if not people:
-    st.info("No members match that search.")
+    ui.empty_state("No members match that search.", ":material/search_off:")
     st.stop()
 
 st.dataframe(
@@ -49,6 +50,7 @@ st.dataframe(
     width="stretch",
 )
 
+st.divider()
 st.subheader("Change a member")
 
 by_id = {person["id"]: person for person in people}

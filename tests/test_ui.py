@@ -318,9 +318,12 @@ def test_page_header_escapes_a_subtitle(shown):
 # --- empty_state() ---------------------------------------------------------
 
 def test_empty_state_shows_the_message_it_is_given(shown):
-    # The wording stays the catalogue's; the helper only frames it.
+    # The wording stays the catalogue's; the helper only frames it. The text
+    # is escaped on the way through, which Markdown renders back identically,
+    # so the reader sees the catalogue sentence unchanged.
     ui.empty_state("No sessions in the next 14 days yet.")
-    assert only_message(shown, "info") == "No sessions in the next 14 days yet."
+    as_read = only_message(shown, "info").replace("\\", "")
+    assert as_read == "No sessions in the next 14 days yet."
 
 
 def test_empty_state_escapes_member_text(shown):

@@ -8,6 +8,8 @@ same way.
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
+from pathlib import Path
 from secrets import choice
 
 import streamlit as st
@@ -30,6 +32,29 @@ _BADGE_COLOURS = {
     Label.NO_GO: ("No-go", "red"),
     Label.UNKNOWN: ("Unknown", "gray"),
 }
+
+# Chip kinds, so a page names a state rather than picking a colour. Every
+# one keeps its word visible; the colour only repeats what the text says.
+CHIP_COLOURS = {
+    "neutral": "gray",
+    "info": "blue",
+    "good": "green",
+    "warn": "orange",
+    "bad": "red",
+}
+
+# The stylesheet is read once from static/. It is a constant file: no value
+# in it ever comes from a member (section 12).
+STYLES = (Path(__file__).resolve().parent.parent / "static" / "lineup.css").read_text()
+
+# Drawn in house rather than fetched, so the app pulls no remote asset.
+WAVE_SVG = (
+    '<svg class="lu-wave" viewBox="0 0 320 24" width="100%" height="24" '
+    'role="presentation" aria-hidden="true" focusable="false">'
+    '<path d="M0 14 C 40 2, 80 2, 120 14 S 200 26, 240 14 S 300 2, 320 10" '
+    'fill="none" stroke="#0E7C86" stroke-width="3" stroke-linecap="round"/>'
+    '</svg>'
+)
 
 # Every character Markdown would otherwise read as markup.
 _MARKDOWN_SPECIALS = set("\\`*_{}[]()#+-.!|$~<>")
@@ -139,3 +164,78 @@ def footer_credit() -> None:
         "Weather data: [Open-Meteo.com](https://open-meteo.com/en/licence), "
         "wave models by Météo-France, ECMWF, NOAA and DWD"
     )
+
+
+def inject_styles() -> None:
+    """Put the LineUp stylesheet on the page once per run.
+
+    The argument is the module constant, never anything a member typed, so
+    no markup can reach the page through it.
+
+    Rules: section 11, section 12 (output safety).
+    """
+    st.html(f"<style>{STYLES}</style>")
+
+
+def page_header(title: str, subtitle: str | None = None) -> None:
+    """Draw a screen's title and optional one-line subtitle.
+
+    Rules: section 11.
+    """
+    st.title(title)
+    if subtitle:
+        st.caption(plain(subtitle))
+
+
+@contextmanager
+def card():
+    """A bordered surface for one session, booking or request.
+
+    Rules: section 11.
+    """
+    with st.container(border=True) as container:
+        yield container
+
+
+def chip_markup(text: str, kind: str = "neutral") -> str:
+    """Return the coloured pill markup for a state, with the text escaped.
+
+    The word is always shown, so the colour never carries the meaning on
+    its own, and an unknown kind falls back to neutral rather than
+    silently losing the pill.
+
+    Rules: section 11, section 12 (output safety).
+    """
+    colour = CHIP_COLOURS.get(kind, CHIP_COLOURS["neutral"])
+    return f":{colour}-background[**{plain(text)}**]"
+
+
+def chip(text: str, kind: str = "neutral") -> None:
+    """Show one state pill.
+
+    Rules: section 11.
+    """
+    st.markdown(chip_markup(text, kind))
+
+
+def empty_state(message: str, icon: str = ":material/surfing:") -> None:
+    """Show the catalogue's own wording for an empty list.
+
+    The helper only frames the message; it never invents new wording.
+
+    Rules: section 11 (empty states).
+    """
+    st.info(plain(message), icon=icon)
+
+
+@contextmanager
+def loading(text: str = "Paddling out\u2026"):
+    """Wrap slow work in a spinner with a waving shaka.
+
+    The hand holds still under prefers-reduced-motion, which the stylesheet
+    enforces; the words are the same either way.
+
+    Rules: section 11.
+    """
+    with st.spinner(text):
+        yield

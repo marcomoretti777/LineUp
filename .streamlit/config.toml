@@ -1,2 +1,48 @@
+# The LineUp visual system. Contrast ratios are recorded in docs/design.md.
+[server]
+# Serves the two self-hosted fonts and the stylesheet from static/.
+enableStaticServing = true
+
 [theme]
-primaryColor = "#0E7490"
+base = "light"
+primaryColor = "#0E7C86"
+backgroundColor = "#FBF6EE"
+secondaryBackgroundColor = "#E6F4F1"
+textColor = "#0B2E4A"
+linkColor = "#0B646C"
+
+font = "Nunito Sans"
+headingFont = "Baloo 2"
+baseFontSize = 16
+baseRadius = "12px"
+buttonRadius = "12px"
+
+# Condition labels keep their meaning colours, darkened so the text on each
+# tint passes AA: Go 7.00:1, Marginal 6.38:1, No-go 6.18:1, Unknown 7.33:1.
+greenColor = "#0F5A40"
+greenBackgroundColor = "#DCF2E8"
+greenTextColor = "#0F5A40"
+orangeColor = "#7A4E00"
+orangeBackgroundColor = "#FDF0D5"
+orangeTextColor = "#7A4E00"
+redColor = "#A3201A"
+redBackgroundColor = "#FBE3E1"
+redTextColor = "#A3201A"
+grayColor = "#3F4D57"
+grayBackgroundColor = "#E8ECEF"
+grayTextColor = "#3F4D57"
+blueColor = "#0B646C"
+blueBackgroundColor = "#D8EDEF"
+blueTextColor = "#0B646C"
+
+[[theme.fontFaces]]
+family = "Nunito Sans"
+url = "app/static/nunitosans.woff2"
+weight = "400 700"
+style = "normal"
+
+[[theme.fontFaces]]
+family = "Baloo 2"
+url = "app/static/baloo2.woff2"
+weight = "400 700"
+style = "normal"
