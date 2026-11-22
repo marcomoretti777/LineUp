@@ -342,3 +342,56 @@ def test_r5_1_closed_message_names_session_start_time(now):
     result = check_can_cancel(**_cancel_kwargs(now, starts_at=starts_at))
     _assert_refused(result, Code.CLOSED)
     assert "08:45" in result.message
+
+
+# --- check_can_leave_waitlist (R4.5) ---
+
+
+def _leave_kwargs(now, **overrides):
+    from lineup.models import WaitStatus
+
+    kwargs = dict(entry_status=WaitStatus.WAITING, now=now, starts_at=now + timedelta(hours=3))
+    kwargs.update(overrides)
+    return kwargs
+
+
+def _check_leave(**kwargs):
+    # Imported here so a missing rule fails only these tests, not the whole file.
+    from lineup.logic.booking import check_can_leave_waitlist
+
+    return check_can_leave_waitlist(**kwargs)
+
+
+def test_r4_5_leave_one_minute_before_start_is_allowed_after_booking_cutoff(now):
+    assert _check_leave(**_leave_kwargs(now, starts_at=now + timedelta(minutes=1))) is None
+
+
+def test_r4_5_leave_at_start_is_closed(now):
+    _assert_refused(_check_leave(**_leave_kwargs(now, starts_at=now)), Code.CLOSED)
+
+
+def test_r4_5_leave_after_start_is_closed(now):
+    result = _check_leave(**_leave_kwargs(now, starts_at=now - timedelta(minutes=1)))
+    _assert_refused(result, Code.CLOSED)
+
+
+@pytest.mark.parametrize("status", ["left", "promoted", "removed", "cleared"])
+def test_r4_5_leave_entry_no_longer_waiting_is_already_done(now, status):
+    from lineup.models import WaitStatus
+
+    result = _check_leave(**_leave_kwargs(now, entry_status=WaitStatus(status)))
+    _assert_refused(result, Code.ALREADY_DONE)
+
+
+def test_r4_5_already_done_wins_over_started(now):
+    from lineup.models import WaitStatus
+
+    result = _check_leave(**_leave_kwargs(now, entry_status=WaitStatus.LEFT, starts_at=now))
+    _assert_refused(result, Code.ALREADY_DONE)
+
+
+def test_r4_5_closed_message_comes_from_catalogue_and_names_start_time(now):
+    result = _check_leave(**_leave_kwargs(now, starts_at=datetime(2026, 11, 20, 8, 45)))
+    _assert_refused(result, Code.CLOSED)
+    assert result.message.startswith(MESSAGES[Code.CLOSED].split("{")[0])
+    assert "08:45" in result.message

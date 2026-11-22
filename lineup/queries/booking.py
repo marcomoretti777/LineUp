@@ -6,6 +6,7 @@ its reads and writes in one transaction.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 
 from sqlalchemy import Connection, Row, insert, select, update
@@ -43,6 +44,40 @@ def has_confirmed_booking(conn: Connection, member_id: int, session_id: int) -> 
             b.c.status == BookingStatus.CONFIRMED.value,
         )
     ).first() is not None
+
+
+def confirmed_session_ids(conn: Connection, member_id: int,
+                          session_ids: Iterable[int]) -> set[int]:
+    """Return which of the given sessions a member holds a confirmed booking for.
+
+    Rules: R3.7.
+    """
+    b = schema.bookings
+    return set(
+        conn.execute(
+            select(b.c.session_id).where(
+                b.c.member_id == member_id,
+                b.c.session_id.in_(list(session_ids)),
+                b.c.status == BookingStatus.CONFIRMED.value,
+            )
+        ).scalars()
+    )
+
+
+def waiting_entries_for_sessions(conn: Connection, session_ids: Iterable[int]) -> list[Row]:
+    """Return the waiting entries of several sessions with id, session_id, member_id, joined_at.
+
+    One query for a whole page of sessions; joined_at is named as in
+    waiting_entries so logic.booking.promotion_order can sort the rows.
+
+    Rules: R4.2, R4.6.
+    """
+    w = schema.waitlist_entries
+    return conn.execute(
+        select(w.c.id, w.c.session_id, w.c.member_id, w.c.created_at.label("joined_at")).where(
+            w.c.session_id.in_(list(session_ids)), w.c.status == WaitStatus.WAITING.value
+        )
+    ).all()
 
 
 def waiting_entry(conn: Connection, member_id: int, session_id: int) -> int | None:
@@ -227,3 +262,54 @@ def leave_entry(conn: Connection, entry_id: int, now: datetime) -> bool:
         .values(status=WaitStatus.LEFT.value, updated_at=now)
     )
     return result.rowcount == 1
+
+
+def _session_columns():
+    # Named like SessionView's fields, so the service builds the view from any row.
+    s, m = schema.surf_sessions, schema.members
+    return (
+        s.c.id, s.c.instructor_id, m.c.full_name.label("instructor_name"), s.c.starts_at,
+        s.c.duration_min, s.c.level, s.c.capacity, s.c.booked_count, s.c.status,
+    )
+
+
+def member_bookings(conn: Connection, member_id: int) -> list[Row]:
+    """Return every booking of one member with its session and instructor's name.
+
+    Rows have booking_id, booking_status, attendance and refunded, plus the
+    SessionView fields (id is the session's id), earliest start first.
+
+    Rules: LU06.
+    """
+    b, s, m = schema.bookings, schema.surf_sessions, schema.members
+    return conn.execute(
+        select(
+            b.c.id.label("booking_id"), b.c.status.label("booking_status"),
+            b.c.attendance, b.c.refunded, *_session_columns(),
+        )
+        .join(s, s.c.id == b.c.session_id)
+        .join(m, m.c.id == s.c.instructor_id)
+        .where(b.c.member_id == member_id)
+        .order_by(s.c.starts_at, b.c.id)
+    ).all()
+
+
+def member_waiting_entries(conn: Connection, member_id: int, now: datetime) -> list[Row]:
+    """Return one member's waiting entries for sessions that start after now.
+
+    Rows have entry_id plus the SessionView fields, earliest start first.
+
+    Rules: R4.5, R4.6.
+    """
+    w, s, m = schema.waitlist_entries, schema.surf_sessions, schema.members
+    return conn.execute(
+        select(w.c.id.label("entry_id"), *_session_columns())
+        .join(s, s.c.id == w.c.session_id)
+        .join(m, m.c.id == s.c.instructor_id)
+        .where(
+            w.c.member_id == member_id,
+            w.c.status == WaitStatus.WAITING.value,
+            s.c.starts_at > now,
+        )
+        .order_by(s.c.starts_at, w.c.id)
+    ).all()
