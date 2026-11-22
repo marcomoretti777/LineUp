@@ -91,23 +91,23 @@ def _upcoming(engine, items: list[booking.UpcomingBooking]) -> None:
         forecast.conditions_for_sessions, engine, [item.session for item in items]
     ) or {}
     for item in items:
-        with st.container(border=True):
-            st.markdown(f"**{_when(item.session)}**")
+        with ui.card():
+            st.markdown(f"### {_when(item.session)}")
             st.caption(_who(item.session))
             ui.badge(conditions.get(item.session.id, _NO_FORECAST))
             st.caption(f"Free cancellation until {fmt_dt(item.free_cancel_until)}.")
-            st.button("Cancel", key=f"cancel_{item.booking_id}",
+            st.button("Cancel", key=f"cancel_{item.booking_id}", width="stretch",
                       on_click=_request_cancel, args=(item,))
     ui.footer_credit()
 
 
 def _waiting(engine, actor_id: int, spots: list[booking.WaitingSpot]) -> None:
     for spot in spots:
-        with st.container(border=True):
-            st.markdown(f"**{_when(spot.session)}**")
+        with ui.card():
+            st.markdown(f"### {_when(spot.session)}")
             st.caption(_who(spot.session))
-            st.markdown(f":blue-background[**Waitlist #{spot.position}**]")
-            if st.button("Leave waitlist", key=f"leave_{spot.entry_id}"):
+            ui.chip(f"Waitlist #{spot.position}", "info")
+            if st.button("Leave waitlist", key=f"leave_{spot.entry_id}", width="stretch"):
                 _finish(ui.run_action(booking.leave_waitlist, engine, actor_id, spot.entry_id))
 
 
@@ -129,13 +129,14 @@ def main() -> None:
     Rules: section 11 (My bookings), LU06, R4.5, R4.6, R5.2.
     """
     engine = ui.get_engine()
+    ui.inject_styles()
     actor = ui.current_actor(engine)
     if actor is None:
         st.stop()
 
-    st.title("My bookings")
+    ui.page_header("My bookings", "Your next session, waitlist places and history.")
     if actor.role != Role.STUDENT:
-        st.info(_STAFF_ONLY)
+        ui.empty_state(_STAFF_ONLY, ":material/info:")
         return
     ui.show_result(st.session_state.pop(_RESULT_KEY, None))
 
@@ -147,18 +148,19 @@ def main() -> None:
     if mine is None:
         return
 
-    st.subheader("Upcoming")
     if mine.upcoming:
+        st.subheader("Next up")
         _upcoming(engine, mine.upcoming)
     if mine.waiting:
         st.subheader("Waiting")
         _waiting(engine, actor.id, mine.waiting)
     if not mine.upcoming and not mine.waiting:
-        st.info(_NO_UPCOMING)
+        ui.empty_state(_NO_UPCOMING, ":material/surfing:")
         st.page_link("app_pages/sessions.py", label="Sessions", icon=":material/surfing:")
 
-    st.subheader("Past")
-    _past(mine.past)
+    # Secondary detail: visible on demand, never competing with Cancel.
+    with st.expander("Past sessions"):
+        _past(mine.past)
 
 
 main()
