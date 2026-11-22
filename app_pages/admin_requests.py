@@ -99,7 +99,7 @@ def _pending(engine, actor_id: int) -> None:
         ui.show_result(listed)
         return
     if not listed.data:
-        st.info("No pending requests.")
+        ui.empty_state("No pending requests.", ":material/inbox:")
         return
     for request in listed.data:
         _pending_card(engine, actor_id, request)
@@ -121,7 +121,7 @@ def _history(engine, actor_id: int) -> None:
         ui.show_result(listed)
         return
     if not listed.data:
-        st.info("No decided requests yet.")
+        ui.empty_state("No decided requests yet.", ":material/history:")
         return
     # st.dataframe draws every cell as plain text, so names and notes are never markup.
     st.dataframe(
@@ -139,11 +139,12 @@ def main() -> None:
     Rules: section 11 (Credit requests), LU11.
     """
     engine = ui.get_engine()
+    ui.inject_styles()
     actor = ui.current_actor(engine)
     if actor is None:
         st.stop()
 
-    st.title("Credit requests")
+    ui.page_header("Credit requests", "Oldest first, so nobody waits twice as long.")
     ui.show_result(st.session_state.pop(_RESULT_KEY, None))
 
     pending_tab, history_tab = st.tabs(["Pending", "History"])

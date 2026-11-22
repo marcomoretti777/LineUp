@@ -92,7 +92,6 @@ def _downloads(engine, actor_id: int, start: date, end: date) -> None:
 
     Rules: R12.7, R12.8.
     """
-    st.subheader("Downloads")
     columns = st.columns(3)
     for column, (label, name, export) in zip(columns, [
         ("Bookings CSV", "bookings", reports.bookings_csv),
@@ -115,11 +114,12 @@ def main() -> None:
     Rules: section 11 (Reports), LU13.
     """
     engine = ui.get_engine()
+    ui.inject_styles()
     actor = ui.current_actor(engine)
     if actor is None:
         st.stop()
 
-    st.title("Reports")
+    ui.page_header("Reports", "How the club is doing over a period.")
     start, end = _period()
 
     numbers = ui.run_action(reports.kpis, engine, actor.id, start, end)
@@ -138,7 +138,9 @@ def main() -> None:
     elif charts is not None:
         ui.show_result(charts)
 
-    _downloads(engine, actor.id, start, end)
+    # Secondary: exports sit behind a click so the numbers lead.
+    with st.expander("Downloads"):
+        _downloads(engine, actor.id, start, end)
 
 
 main()

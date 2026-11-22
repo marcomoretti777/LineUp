@@ -37,7 +37,7 @@ def _packs(packs: list[dict]) -> None:
     """
     st.subheader("Packs")
     for column, pack in zip(st.columns(len(packs) or 1), packs, strict=False):
-        with column, st.container(border=True):
+        with column, ui.card():
             st.markdown(f"**{ui.plain(pack['name'])}**")
             st.write(f"{pack['credits']} credit{'' if pack['credits'] == 1 else 's'}")
             st.metric("Price", pack["price"], label_visibility="collapsed")
@@ -70,7 +70,7 @@ def _pending(engine, actor_id: int, requests: list[dict]) -> None:
         st.caption("No pending request.")
         return
     request = pending[0]
-    with st.container(border=True):
+    with ui.card():
         st.markdown(f"**Pending:** {ui.plain(request['pack_name'])} · {request['price']}")
         st.caption(f"Requested {fmt_dt(request['created_at'])}")
         st.text(f"Reference: {request['payment_ref']}")
@@ -87,9 +87,8 @@ def _statement(rows: list[dict]) -> None:
 
     Rules: R10.7, R10.8, R12.7, R12.8.
     """
-    st.subheader("Statement")
     if not rows:
-        st.info("No credit movements yet.")
+        ui.empty_state("No credit movements yet.", ":material/receipt_long:")
         return
     # st.dataframe draws every cell as plain text, so notes are never markup.
     st.dataframe(
@@ -111,11 +110,12 @@ def main() -> None:
     Rules: section 11 (Credits), LU10.
     """
     engine = ui.get_engine()
+    ui.inject_styles()
     actor = ui.current_actor(engine)
     if actor is None:
         st.stop()
 
-    st.title("Credits")
+    ui.page_header("Credits", "One credit books one session.")
     ui.show_result(st.session_state.pop(_RESULT_KEY, None))
 
     statement = ui.run_action(credits.statement, engine, actor.id)
@@ -137,7 +137,9 @@ def main() -> None:
         _request_form(engine, actor.id, packs)
         _pending(engine, actor.id, requests.data if requests else [])
 
-    _statement(statement.data["rows"])
+    # Secondary detail: the statement is reference, not the next step.
+    with st.expander("Statement"):
+        _statement(statement.data["rows"])
 
 
 main()
