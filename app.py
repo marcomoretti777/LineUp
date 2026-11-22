@@ -26,7 +26,6 @@ _PAGES = {
     "admin_requests": ("Credit requests", "app_pages/admin_requests.py"),
     "admin_members": ("Members", "app_pages/admin_members.py"),
     "admin_reports": ("Reports", "app_pages/admin_reports.py"),
-    "admin_settings": ("Settings", "app_pages/admin_settings.py"),
 }
 
 _NAVIGATION = {
@@ -34,7 +33,7 @@ _NAVIGATION = {
     Role.INSTRUCTOR: ("sessions", "instructor_sessions", "roster", "inbox"),
     Role.ADMIN: (
         "sessions", "roster", "admin_requests", "admin_members",
-        "admin_reports", "admin_settings", "inbox",
+        "admin_reports", "inbox",
     ),
 }
 
