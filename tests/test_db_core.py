@@ -105,6 +105,27 @@ def test_section8_make_engine_without_url_creates_the_data_folder(tmp_path, monk
         eng.dispose()
 
 
+def test_section8_postgres_engine_recycles_instead_of_pinging_every_checkout(monkeypatch):
+    # A ping per checkout is one more Atlantic round trip on every query;
+    # recycling retires connections before the Supabase pooler drops them.
+    module = db()
+    seen = {}
+    # Captured rather than built, so the test needs no Postgres driver.
+    monkeypatch.setattr(module, "create_engine",
+                        lambda url, **options: seen.update(options))
+    module.make_engine("postgresql+psycopg://localhost/lineup_test")
+    assert not seen.get("pool_pre_ping")
+    assert 0 < seen["pool_recycle"] <= 300
+
+
+def test_section8_sqlite_engine_never_recycles():
+    eng = db().make_engine("sqlite://")
+    try:
+        assert eng.pool._recycle == -1
+    finally:
+        eng.dispose()
+
+
 def test_section9_sqlite_enforces_foreign_keys(engine):
     with pytest.raises(IntegrityError):
         with engine.begin() as conn:

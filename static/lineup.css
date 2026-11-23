@@ -68,6 +68,13 @@ button[kind="secondary"], button[data-testid="stBaseButton-secondary"] {
   50%      { transform: rotate(3deg); }
 }
 
+/* The 10-second refresh redraws the cards in place. Streamlit greys out
+   the old content meanwhile, which every member saw as the page blinking. */
+[data-stale="true"] {
+  opacity: 1 !important;
+  transition: none !important;
+}
+
 /* Same information, no motion, for anyone who asked for less of it. */
 @media (prefers-reduced-motion: reduce) {
   .lu-shaka { animation: none !important; transform: none !important; }

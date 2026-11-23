@@ -38,6 +38,7 @@ from lineup.timeutil import from_local, local_date
 
 DEFAULT_SQLITE_PATH = Path("data") / "lineup.db"
 NOTIFICATION_MAX = 300
+POOL_RECYCLE_SECONDS = 240
 
 
 def _enable_sqlite_foreign_keys(dbapi_connection, _record) -> None:
@@ -51,8 +52,10 @@ def make_engine(url: str | None = None) -> Engine:
     """Create the database engine for a URL, or the local SQLite file if none.
 
     "sqlite://" gives an in-memory database shared through one connection
-    (tests). Postgres connections are checked before use, because the
-    Supabase pooler drops idle ones.
+    (tests). Postgres connections are retired after a few minutes, before
+    the Supabase pooler drops idle ones, rather than pinged before every
+    use: the app and the database sit on different continents, so a ping
+    is one more slow round trip on every query.
 
     Rules: section 8, section 14 (settings the app reads).
     """
@@ -68,7 +71,7 @@ def make_engine(url: str | None = None) -> Engine:
         event.listen(engine, "connect", _enable_sqlite_foreign_keys)
         return engine
 
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine(url, pool_recycle=POOL_RECYCLE_SECONDS)
 
 
 def rls_statements(dialect_name: str) -> list[str]:
