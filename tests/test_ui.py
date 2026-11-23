@@ -454,3 +454,54 @@ def test_cached_conditions_reads_again_for_a_moved_session(forecast_reads):
     ui.cached_conditions(object(), [_view(1)])
     ui.cached_conditions(object(), [_view(1, start=datetime(2026, 11, 22, 9, 0))])
     assert len(forecast_reads) == 2
+
+
+# =========================================================================
+# F15: conditions_for, the adapter that lets pages and decision_needed
+# share the five-minute forecast cache.
+# =========================================================================
+
+def test_conditions_for_carries_the_services_signature():
+    # decision_needed calls conditions(engine, sessions, now=now), so the
+    # adapter must accept now without complaint.
+    import inspect
+    taken = inspect.signature(ui.conditions_for).parameters
+    assert {"engine", "sessions", "now", "fetch"} <= set(taken)
+
+
+def test_conditions_for_reads_the_forecast_once_across_calls(forecast_reads):
+    sessions = [_view(1), _view(2)]
+    first = ui.conditions_for(object(), sessions)
+    second = ui.conditions_for(object(), sessions)
+    assert forecast_reads == [[1, 2]]
+    assert first == second
+
+
+def test_conditions_for_accepts_now_and_still_uses_the_cache(forecast_reads):
+    engine = object()
+    ui.conditions_for(engine, [_view(1)])
+    ui.conditions_for(engine, [_view(1)], now=datetime(2026, 11, 23, 9, 0))
+    assert len(forecast_reads) == 1
+
+
+def test_conditions_for_shares_its_cache_with_cached_conditions(forecast_reads):
+    ui.cached_conditions(object(), [_view(1)])
+    ui.conditions_for(object(), [_view(1)])
+    assert len(forecast_reads) == 1
+
+
+def test_conditions_for_accepts_an_iterable_not_only_a_list(forecast_reads):
+    ui.conditions_for(object(), iter([_view(1)]))
+    assert forecast_reads == [[1]]
+
+
+def test_conditions_for_skips_the_cache_when_a_fetch_is_supplied(forecast_reads):
+    # A caller passing its own fetch wants a live read, not a shared copy.
+    ui.conditions_for(object(), [_view(1)])
+    ui.conditions_for(object(), [_view(1)], fetch=lambda: None)
+    assert len(forecast_reads) == 2
+
+
+def test_conditions_for_returns_a_label_for_every_session(forecast_reads):
+    labels = ui.conditions_for(object(), [_view(1), _view(2), _view(3)])
+    assert sorted(labels) == [1, 2, 3]
