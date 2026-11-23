@@ -12,7 +12,7 @@ import streamlit as st
 
 from lineup import ui
 from lineup.models import Code, Condition, Label, Level, Role, SessionView
-from lineup.services import booking, forecast
+from lineup.services import booking
 from lineup.timeutil import fmt_dt, fmt_time
 
 # Session-state keys: the last action's Result survives the rerun that closes
@@ -155,7 +155,7 @@ def _cards(engine, actor, level: Level | None, only_bookable: bool) -> None:
         ui.empty_state(_NO_SESSIONS)
         return
     conditions = ui.run_action(
-        forecast.conditions_for_sessions, engine, [card.session for card in cards]
+        ui.cached_conditions, engine, [card.session for card in cards]
     ) or {}
     shown = [
         card for card in cards

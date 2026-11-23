@@ -16,9 +16,12 @@ import streamlit as st
 from sqlalchemy.engine import Engine
 
 from lineup import config, db
-from lineup.models import Actor, Condition, Label, Result
+from lineup.models import Actor, Condition, Label, Result, SessionView
+from lineup.services import forecast
 
 _LOG = logging.getLogger(__name__)
+
+FORECAST_CACHE_SECONDS = 300
 
 # No look-alike characters, because people read the reference out loud or
 # type it into a message to the club.
@@ -72,6 +75,26 @@ def get_engine() -> Engine:
     engine = db.make_engine(config.get_secret("DATABASE_URL"))
     db.init_db(engine)
     return engine
+
+
+def _forecast_key(session: SessionView) -> tuple:
+    # Only what the label depends on: a booking changing the places left
+    # must not throw the cached labels away.
+    return (session.id, session.starts_at, session.duration_min, session.level.value)
+
+
+@st.cache_data(ttl=FORECAST_CACHE_SECONDS, show_spinner=False,
+               hash_funcs={SessionView: _forecast_key})
+def cached_conditions(_engine: Engine, sessions: list[SessionView]) -> dict[int, Condition]:
+    """Return the conditions labels for these sessions, shared for five minutes.
+
+    The forecast changes hourly, yet every open screen used to read it from
+    the database on each 10-second refresh. One copy now serves every member
+    for five minutes; a threshold an admin changes shows within that time.
+
+    Rules: R6, R7, section 11 (Sessions).
+    """
+    return forecast.conditions_for_sessions(_engine, sessions)
 
 
 def current_actor(engine: Engine) -> Actor | None:
