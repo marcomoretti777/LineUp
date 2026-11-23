@@ -7,6 +7,7 @@ Result.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from sqlalchemy import func, insert, select, update
@@ -18,6 +19,7 @@ from lineup.models import Code, Level, Result, Role, fill
 from lineup.permissions import Action, require
 from lineup.timeutil import utcnow
 
+_LOG = logging.getLogger(__name__)
 
 def _fallback_name(email: str) -> str:
     """Build a usable display name from an address when none was given.
@@ -35,7 +37,9 @@ def login_member(engine: Engine, auth_user_id: str, email: str,
 
     No permission check, by design: this runs before an actor exists and is
     what creates one. A seeded address keeps the role and level it was
-    seeded with, so logging in never demotes an admin.
+    seeded with, so logging in never demotes an admin. A profile whose
+    Supabase account was deleted and re-created is re-linked, keeping its
+    role, level, credits and history.
 
     Rules: R1.4.
     """
@@ -52,18 +56,25 @@ def login_member(engine: Engine, auth_user_id: str, email: str,
         if known is not None:
             return Result.success("Signed in.", known)
 
-        seeded = conn.execute(
-            select(schema.members.c.id)
+        # A profile with this address but no auth id was seeded; one with a
+        # different auth id lost its Supabase account (deleted in the
+        # dashboard) and this is its owner signing up again. Supabase allows
+        # one account per address, so in both cases the profile follows the
+        # new auth id instead of a duplicate being inserted.
+        existing = conn.execute(
+            select(schema.members.c.id, schema.members.c.auth_user_id)
             .where(schema.members.c.email == address)
-            .where(schema.members.c.auth_user_id.is_(None))
-        ).scalar_one_or_none()
-        if seeded is not None:
+        ).first()
+        if existing is not None:
+            if existing.auth_user_id is not None:
+                _LOG.warning("Member %s re-linked to a re-created Supabase account",
+                             existing.id)
             conn.execute(
                 update(schema.members)
-                .where(schema.members.c.id == seeded)
+                .where(schema.members.c.id == existing.id)
                 .values(auth_user_id=auth_user_id)
             )
-            return Result.success("Signed in.", seeded)
+            return Result.success("Signed in.", existing.id)
 
         member_id = conn.execute(
             insert(schema.members).values(
