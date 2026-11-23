@@ -247,22 +247,53 @@ def test_r1_3_password_supabase_finds_weak_is_explained():
     assert result.data == {"field": "password"}
 
 
-@pytest.mark.parametrize(
-    "code, words",
-    [
-        ("email_address_invalid", "refused this address"),
-        ("email_address_not_authorized", "refused this address"),
-        ("over_email_send_rate_limit", "wait a few minutes"),
-        ("over_request_rate_limit", "wait a few minutes"),
-        ("signup_disabled", "closed"),
-        ("email_provider_disabled", "closed"),
-    ],
-)
-def test_r1_1_supabase_refusal_reason_reaches_the_member(code, words):
+REFUSAL_REASONS = [
+    ("user_already_exists", "already exists"),
+    ("email_exists", "already exists"),
+    ("email_address_invalid", "does not accept this address as a real mailbox"),
+    ("email_address_not_authorized", "can only send confirmation emails to the club's own team"),
+    ("over_email_send_rate_limit", "as many confirmation emails as it is allowed this hour"),
+    ("over_request_rate_limit", "Too many sign-up attempts came from this network"),
+    ("signup_disabled", "Creating new accounts is switched off"),
+    ("email_provider_disabled", "Signing up with an email address is switched off"),
+    ("validation_failed", "could not read the details"),
+    ("captcha_failed", "robot check"),
+    ("unexpected_failure", "had a problem on its side"),
+    ("request_timeout", "took too long to answer"),
+]
+
+
+@pytest.mark.parametrize("code, reason", REFUSAL_REASONS)
+def test_r1_1_supabase_refusal_reason_reaches_the_member(code, reason):
     result = auth.sign_up("75080@novasbe.pt", GOOD_PASSWORD, "Diogo Alves",
                           client_factory=RaisingFactory(_api_error(code)))
     assert result.code is Code.INVALID
-    assert words in result.message
+    assert reason in result.message
+
+
+@pytest.mark.parametrize("code", [code for code, _ in REFUSAL_REASONS] + ["weak_password"])
+def test_section11_supabase_codes_never_reach_the_screen(code):
+    if code == "weak_password":
+        from supabase_auth.errors import AuthWeakPasswordError
+
+        error = AuthWeakPasswordError("weak", 422, ["length", "characters", "pwned"])
+    else:
+        error = _api_error(code)
+    result = auth.sign_up("75080@novasbe.pt", GOOD_PASSWORD, "Diogo Alves",
+                          client_factory=RaisingFactory(error))
+    assert code not in result.message
+    assert "_" not in result.message
+
+
+def test_r1_3_every_weak_password_reason_is_explained():
+    from supabase_auth.errors import AuthWeakPasswordError
+
+    error = AuthWeakPasswordError("weak", 422, ["length", "characters", "pwned"])
+    result = auth.sign_up("75080@novasbe.pt", GOOD_PASSWORD, "Diogo Alves",
+                          client_factory=RaisingFactory(error))
+    assert "shorter than the sign-up service requires" in result.message
+    assert "lower case, upper case, digits and symbols" in result.message
+    assert "known data leak" in result.message
 
 
 def test_r1_1_unknown_supabase_failure_keeps_the_general_message():
