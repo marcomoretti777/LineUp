@@ -185,3 +185,126 @@ def test_sign_in_normalises_the_address_before_sending_it():
     factory = CountingFactory()
     auth.sign_in("  Ana@NovaSBE.pt  ", GOOD_PASSWORD, client_factory=factory)
     assert factory.clients[0].seen_emails == ["ana@novasbe.pt"]
+
+
+# --- Supabase refusals at sign-up -----------------------------------------
+# A refusal from Supabase must reach the member as its reason, not as one
+# catch-all sentence, or nobody can tell why an account was not created.
+
+
+class RaisingFactory:
+    """A client factory whose sign_up raises the given Supabase error."""
+
+    def __init__(self, error):
+        self.error = error
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        error = self.error
+
+        class _Auth:
+            def sign_up(self, credentials):
+                raise error
+
+        class _Client:
+            auth = _Auth()
+
+        return _Client()
+
+
+def _api_error(code, status=400, message="refused"):
+    from supabase_auth.errors import AuthApiError
+
+    return AuthApiError(message, status, code)
+
+
+def test_r1_1_student_number_address_reaches_supabase():
+    factory = CountingFactory()
+    result = auth.sign_up("75080@novasbe.pt", GOOD_PASSWORD, "Diogo Alves", client_factory=factory)
+    assert result.ok
+    assert factory.clients[0].seen_emails == ["75080@novasbe.pt"]
+
+
+@pytest.mark.parametrize("code", ["user_already_exists", "email_exists"])
+def test_r1_4_existing_supabase_account_is_told_to_log_in(code):
+    result = auth.sign_up("75080@novasbe.pt", GOOD_PASSWORD, "Diogo Alves",
+                          client_factory=RaisingFactory(_api_error(code, 422)))
+    assert result.code is Code.INVALID
+    assert "already exists" in result.message
+    assert "Log in" in result.message
+
+
+def test_r1_3_password_supabase_finds_weak_is_explained():
+    from supabase_auth.errors import AuthWeakPasswordError
+
+    error = AuthWeakPasswordError("weak", 422, ["pwned"])
+    result = auth.sign_up("75080@novasbe.pt", GOOD_PASSWORD, "Diogo Alves",
+                          client_factory=RaisingFactory(error))
+    assert result.code is Code.INVALID
+    assert result.message.startswith("Password:")
+    assert "data leak" in result.message
+    assert result.data == {"field": "password"}
+
+
+REFUSAL_REASONS = [
+    ("user_already_exists", "already exists"),
+    ("email_exists", "already exists"),
+    ("email_address_invalid", "does not accept this address as a real mailbox"),
+    ("email_address_not_authorized", "can only send confirmation emails to the club's own team"),
+    ("over_email_send_rate_limit", "as many confirmation emails as it is allowed this hour"),
+    ("over_request_rate_limit", "Too many sign-up attempts came from this network"),
+    ("signup_disabled", "Creating new accounts is switched off"),
+    ("email_provider_disabled", "Signing up with an email address is switched off"),
+    ("validation_failed", "could not read the details"),
+    ("captcha_failed", "robot check"),
+    ("unexpected_failure", "had a problem on its side"),
+    ("request_timeout", "took too long to answer"),
+]
+
+
+@pytest.mark.parametrize("code, reason", REFUSAL_REASONS)
+def test_r1_1_supabase_refusal_reason_reaches_the_member(code, reason):
+    result = auth.sign_up("75080@novasbe.pt", GOOD_PASSWORD, "Diogo Alves",
+                          client_factory=RaisingFactory(_api_error(code)))
+    assert result.code is Code.INVALID
+    assert reason in result.message
+
+
+@pytest.mark.parametrize("code", [code for code, _ in REFUSAL_REASONS] + ["weak_password"])
+def test_section11_supabase_codes_never_reach_the_screen(code):
+    if code == "weak_password":
+        from supabase_auth.errors import AuthWeakPasswordError
+
+        error = AuthWeakPasswordError("weak", 422, ["length", "characters", "pwned"])
+    else:
+        error = _api_error(code)
+    result = auth.sign_up("75080@novasbe.pt", GOOD_PASSWORD, "Diogo Alves",
+                          client_factory=RaisingFactory(error))
+    assert code not in result.message
+    assert "_" not in result.message
+
+
+def test_r1_3_every_weak_password_reason_is_explained():
+    from supabase_auth.errors import AuthWeakPasswordError
+
+    error = AuthWeakPasswordError("weak", 422, ["length", "characters", "pwned"])
+    result = auth.sign_up("75080@novasbe.pt", GOOD_PASSWORD, "Diogo Alves",
+                          client_factory=RaisingFactory(error))
+    assert "shorter than the sign-up service requires" in result.message
+    assert "lower case, upper case, digits and symbols" in result.message
+    assert "known data leak" in result.message
+
+
+def test_r1_1_unknown_supabase_failure_keeps_the_general_message():
+    result = auth.sign_up("75080@novasbe.pt", GOOD_PASSWORD, "Diogo Alves",
+                          client_factory=RaisingFactory(RuntimeError("network down")))
+    assert result.message == "Could not create the account. Please try again."
+
+
+def test_section12_sign_up_logs_the_supabase_code_but_never_the_password(caplog):
+    with caplog.at_level("WARNING", logger="lineup.auth"):
+        auth.sign_up("75080@novasbe.pt", GOOD_PASSWORD, "Diogo Alves",
+                      client_factory=RaisingFactory(_api_error("email_address_invalid")))
+    assert "email_address_invalid" in caplog.text
+    assert GOOD_PASSWORD not in caplog.text
