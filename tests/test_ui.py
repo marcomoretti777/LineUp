@@ -10,11 +10,14 @@ Rules: section 8 (run_action), section 11, section 12 (output safety).
 
 import logging
 import re
+from datetime import datetime
 
 import pytest
 
 from lineup import ui
-from lineup.models import Code, Condition, Label, Result
+from lineup.models import (
+    Code, Condition, Label, Level, Result, SessionStatus, SessionView,
+)
 
 RECORDED = ("success", "error", "toast", "markdown", "caption", "title", "info")
 
@@ -391,3 +394,63 @@ class _NullContext:
         return self
     def __exit__(self, *exc):
         return False
+
+
+# --- smooth refresh ---------------------------------------------------------
+
+def test_styles_keep_content_visible_while_it_refreshes():
+    # Streamlit greys out stale content during every 10-second refresh,
+    # which every member saw as the page blinking.
+    rule = re.search(r'\[data-stale="true"\][^{]*\{([^}]*)\}', ui.STYLES)
+    assert rule is not None
+    assert re.search(r"opacity:\s*1\s*(!important)?\s*;", rule.group(1))
+
+
+def _view(session_id, booked=0, start=datetime(2026, 11, 21, 9, 0)):
+    return SessionView(
+        id=session_id, instructor_id=1, instructor_name="Rita", starts_at=start,
+        duration_min=90, level=Level.BEGINNER, capacity=4, booked_count=booked,
+        status=SessionStatus.SCHEDULED,
+    )
+
+
+@pytest.fixture
+def forecast_reads(monkeypatch):
+    """Count the forecast service calls behind ui.cached_conditions."""
+    calls = []
+
+    def fake(engine, sessions, **kwargs):
+        calls.append([s.id for s in sessions])
+        return {s.id: Condition(Label.GO, 1.0, 10.0, "") for s in sessions}
+
+    monkeypatch.setattr(ui.forecast, "conditions_for_sessions", fake)
+    ui.cached_conditions.clear()
+    yield calls
+    ui.cached_conditions.clear()
+
+
+def test_cached_conditions_reads_the_forecast_once_across_refreshes(forecast_reads):
+    sessions = [_view(1), _view(2)]
+    first = ui.cached_conditions(object(), sessions)
+    second = ui.cached_conditions(object(), sessions)
+    assert forecast_reads == [[1, 2]]
+    assert first == second
+    assert first[1].label is Label.GO
+
+
+def test_cached_conditions_ignores_a_change_in_places_left(forecast_reads):
+    ui.cached_conditions(object(), [_view(1, booked=0)])
+    ui.cached_conditions(object(), [_view(1, booked=3)])
+    assert len(forecast_reads) == 1
+
+
+def test_cached_conditions_reads_again_for_a_new_session(forecast_reads):
+    ui.cached_conditions(object(), [_view(1)])
+    ui.cached_conditions(object(), [_view(1), _view(2)])
+    assert forecast_reads == [[1], [1, 2]]
+
+
+def test_cached_conditions_reads_again_for_a_moved_session(forecast_reads):
+    ui.cached_conditions(object(), [_view(1)])
+    ui.cached_conditions(object(), [_view(1, start=datetime(2026, 11, 22, 9, 0))])
+    assert len(forecast_reads) == 2
