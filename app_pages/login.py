@@ -87,7 +87,10 @@ with sign_up_tab:
             result = ui.run_action(auth.sign_up, new_email, new_password, new_name)
             if result is not None:
                 if not result.ok:
-                    email_slot.error(result.message)
+                    # Show the refusal under the field it is about.
+                    field = (result.data or {}).get("field")
+                    slot = password_slot if field == "password" else email_slot
+                    slot.error(result.message)
                 elif result.data.get("needs_confirmation"):
                     st.info(
                         "Account created. Confirm your email address, then log in."
