@@ -199,3 +199,63 @@ def test_list_members_can_be_searched_by_name_or_email(engine):
     assert [m["full_name"] for m in by_email.data] == ["Bruno Lopes"]
 
     assert len(members.list_members(engine, admin, search="   ").data) == 3
+
+
+# --- R1.4 re-created Supabase accounts --------------------------------------
+# Deleting a user in the Supabase dashboard leaves the LineUp profile behind,
+# still pointing at the old auth id. When the person signs up again, Supabase
+# gives the same address a new auth id; the profile must follow it instead
+# of a second profile being inserted for the same address.
+
+
+def set_auth_id(engine, member_id, auth_user_id):
+    with engine.begin() as conn:
+        conn.execute(
+            schema.members.update()
+            .where(schema.members.c.id == member_id)
+            .values(auth_user_id=auth_user_id)
+        )
+
+
+def auth_id_of(engine, member_id):
+    with engine.begin() as conn:
+        return conn.execute(
+            select(schema.members.c.auth_user_id).where(schema.members.c.id == member_id)
+        ).scalar_one()
+
+
+def test_r1_4_recreated_supabase_account_takes_over_its_old_profile(engine):
+    diogo = make_member(engine, name="Diogo Alves", email="75080@novasbe.pt")
+    set_auth_id(engine, diogo, "auth-deleted")
+
+    result = members.login_member(engine, "auth-recreated", "75080@novasbe.pt", "Diogo Alves")
+
+    assert result.ok is True
+    assert result.data == diogo
+    assert auth_id_of(engine, diogo) == "auth-recreated"
+    with engine.begin() as conn:
+        rows = conn.execute(
+            select(schema.members.c.id).where(schema.members.c.email == "75080@novasbe.pt")
+        ).all()
+    assert len(rows) == 1
+
+
+def test_r1_4_recreated_account_keeps_its_role_and_level(engine):
+    marta = make_member(engine, role="admin", level="intermediate", email="marta@novasbe.pt")
+    set_auth_id(engine, marta, "auth-deleted")
+
+    members.login_member(engine, "auth-recreated", "Marta@NovaSBE.pt", "Marta Silva")
+
+    assert role_of(engine, marta) == Role.ADMIN.value
+    assert level_of(engine, marta) == Level.INTERMEDIATE.value
+
+
+def test_r1_4_recreated_account_logs_in_normally_afterwards(engine):
+    diogo = make_member(engine, email="75080@novasbe.pt")
+    set_auth_id(engine, diogo, "auth-deleted")
+    members.login_member(engine, "auth-recreated", "75080@novasbe.pt")
+
+    again = members.login_member(engine, "auth-recreated", "75080@novasbe.pt")
+
+    assert again.ok is True
+    assert again.data == diogo
