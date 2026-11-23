@@ -163,7 +163,10 @@ def _delete_dialog(engine, actor_id: int, session: SessionView) -> None:
 
 def _decisions(engine, actor_id: int) -> None:
     st.subheader("Needs your decision")
-    result = ui.run_action(sessions.decision_needed, engine, actor_id)
+    # The shared five-minute cache, so this page's three forecast passes
+    # become one read.
+    result = ui.run_action(sessions.decision_needed, engine, actor_id,
+                           conditions=ui.conditions_for)
     if result is None:
         return
     if not result.ok:
@@ -223,7 +226,7 @@ def _upcoming(engine, actor_id: int) -> None:
         ui.empty_state(_NO_UPCOMING, ":material/event_available:")
         return
     scheduled = [s for s in mine if s.status == SessionStatus.SCHEDULED]
-    conditions = ui.run_action(forecast.conditions_for_sessions, engine, scheduled) or {}
+    conditions = ui.run_action(ui.conditions_for, engine, scheduled) or {}
     for session in mine:
         with ui.card():
             st.markdown(f"### {_when(session)}")

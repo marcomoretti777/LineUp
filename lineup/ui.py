@@ -97,6 +97,21 @@ def cached_conditions(_engine: Engine, sessions: list[SessionView]) -> dict[int,
     return forecast.conditions_for_sessions(_engine, sessions)
 
 
+def conditions_for(engine: Engine, sessions, now=None, fetch=None) -> dict[int, Condition]:
+    """Conditions for these sessions, from the shared cache where possible.
+
+    Carries the service's own signature, so it can be injected wherever
+    conditions_for_sessions is expected. A caller supplying its own fetch
+    wants a live read, so that path skips the cache entirely.
+
+    Rules: R6, R7, section 11.
+    """
+    sessions = list(sessions)
+    if fetch is not None:
+        return forecast.conditions_for_sessions(engine, sessions, now=now, fetch=fetch)
+    return cached_conditions(engine, sessions)
+
+
 def current_actor(engine: Engine) -> Actor | None:
     """Return the signed-in member, re-read from the database on every rerun.
 
