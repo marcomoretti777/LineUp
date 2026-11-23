@@ -12,7 +12,7 @@ import streamlit as st
 
 from lineup import ui
 from lineup.models import Condition, Label, Role, SessionView
-from lineup.services import booking, forecast
+from lineup.services import booking
 from lineup.timeutil import fmt_dt, fmt_time
 
 # Session-state keys: the last action's Result survives the rerun that closes
@@ -88,7 +88,7 @@ def _request_cancel(item: booking.UpcomingBooking) -> None:
 
 def _upcoming(engine, items: list[booking.UpcomingBooking]) -> None:
     conditions = ui.run_action(
-        forecast.conditions_for_sessions, engine, [item.session for item in items]
+        ui.conditions_for, engine, [item.session for item in items]
     ) or {}
     for item in items:
         with ui.card():
