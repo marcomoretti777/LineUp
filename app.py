@@ -15,17 +15,20 @@ from lineup import config, db, ui
 from lineup.models import Actor, Role
 from lineup.services import members
 
-# Title, then the page file, in the order spec section 11 lists them.
+# Title, file and icon, in the order spec section 11 lists them.
 _PAGES = {
-    "sessions": ("Sessions", "app_pages/sessions.py"),
-    "my_bookings": ("My bookings", "app_pages/my_bookings.py"),
-    "credits": ("Credits", "app_pages/credits.py"),
-    "inbox": ("Inbox", "app_pages/inbox.py"),
-    "instructor_sessions": ("My sessions", "app_pages/instructor_sessions.py"),
-    "roster": ("Roster", "app_pages/roster.py"),
-    "admin_requests": ("Credit requests", "app_pages/admin_requests.py"),
-    "admin_members": ("Members", "app_pages/admin_members.py"),
-    "admin_reports": ("Reports", "app_pages/admin_reports.py"),
+    "sessions": ("Sessions", "app_pages/sessions.py", ":material/surfing:"),
+    "my_bookings": ("My bookings", "app_pages/my_bookings.py", ":material/event:"),
+    "credits": ("Credits", "app_pages/credits.py", ":material/toll:"),
+    "inbox": ("Inbox", "app_pages/inbox.py", ":material/inbox:"),
+    "instructor_sessions": ("My sessions", "app_pages/instructor_sessions.py",
+                            ":material/calendar_month:"),
+    "roster": ("Roster", "app_pages/roster.py", ":material/groups:"),
+    "admin_requests": ("Credit requests", "app_pages/admin_requests.py",
+                       ":material/request_quote:"),
+    "admin_members": ("Members", "app_pages/admin_members.py",
+                      ":material/manage_accounts:"),
+    "admin_reports": ("Reports", "app_pages/admin_reports.py", ":material/insights:"),
 }
 
 _NAVIGATION = {
@@ -53,7 +56,8 @@ def _demo_login(engine: Engine) -> None:
 
     Rules: R1.7.
     """
-    st.title("LineUp")
+    ui.page_header("LineUp", "Surf sessions for the campus surf club.")
+    st.html(ui.WAVE_SVG)
     st.error(
         "Local demo mode: anyone can sign in as any member without a password. "
         "Never point this at real data."
@@ -97,12 +101,13 @@ def _sidebar(engine: Engine, actor: Actor, inbox_page: st.Page | None) -> None:
     Rules: section 11 (sidebar), R1.7.
     """
     with st.sidebar:
-        st.markdown(f"**{ui.plain(actor.full_name)}**")
-        st.caption(actor.role.value.replace("_", " ").capitalize())
+        st.markdown(f"### {ui.plain(actor.full_name)}")
+        ui.chip(actor.role.value.replace("_", " ").capitalize(), "info")
 
         if actor.role == Role.STUDENT:
             with engine.begin() as conn:
                 st.metric("Credits", db.ledger_balance(conn, actor.id))
+        st.divider()
 
         if inbox_page is not None:
             st.page_link(inbox_page, icon=":material/mail:")
@@ -122,7 +127,7 @@ def _pages_for(actor: Actor) -> dict[str, st.Page]:
     Rules: section 3, section 11.
     """
     return {
-        key: st.Page(_PAGES[key][1], title=_PAGES[key][0])
+        key: st.Page(_PAGES[key][1], title=_PAGES[key][0], icon=_PAGES[key][2])
         for key in _NAVIGATION.get(actor.role, _NAVIGATION[Role.STUDENT])
     }
 
@@ -132,7 +137,8 @@ def main() -> None:
 
     Rules: section 8, section 11, R1.7.
     """
-    st.set_page_config(page_title="LineUp", page_icon="🌊", layout="centered")
+    st.set_page_config(page_title="LineUp", page_icon="🤙", layout="centered")
+    ui.inject_styles()
     engine = ui.get_engine()
 
     actor = ui.current_actor(engine)

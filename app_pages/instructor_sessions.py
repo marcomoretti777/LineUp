@@ -173,12 +173,13 @@ def _decisions(engine, actor_id: int) -> None:
         st.caption(_NO_DECISIONS)
         return
     for session, condition in result.data:
-        with st.container(border=True):
-            st.markdown(f"**{_when(session)}**")
+        with ui.card():
+            st.markdown(f"### {_when(session)}")
             ui.badge(condition)
-            st.caption(_booked(session))
+            st.caption(f":material/groups: {_booked(session)}")
             call_col, roster_col = st.columns(2)
             call_col.button("Call off", key=f"decide_call_off_{session.id}",
+                            type="primary", width="stretch",
                             on_click=_open, args=(_CALL_OFF_KEY, session))
             with roster_col:
                 st.page_link("app_pages/roster.py", label="Roster", icon=":material/group:",
@@ -186,7 +187,6 @@ def _decisions(engine, actor_id: int) -> None:
 
 
 def _create_form(engine, actor_id: int) -> None:
-    st.subheader("Create a session")
     first, last = _day_bounds()
     # Outside the form so the sunset line below follows the chosen date at once.
     day = st.date_input("Date", value=first, min_value=first, max_value=last, key="create_day")
@@ -220,16 +220,17 @@ def _upcoming(engine, actor_id: int) -> None:
         return
     mine: list[SessionView] = result.data
     if not mine:
-        st.info(_NO_UPCOMING)
+        ui.empty_state(_NO_UPCOMING, ":material/event_available:")
         return
     scheduled = [s for s in mine if s.status == SessionStatus.SCHEDULED]
     conditions = ui.run_action(forecast.conditions_for_sessions, engine, scheduled) or {}
     for session in mine:
-        with st.container(border=True):
-            st.markdown(f"**{_when(session)}**")
-            st.caption(f"{session.level.value.capitalize()} · {_booked(session)}")
+        with ui.card():
+            st.markdown(f"### {_when(session)}")
+            ui.chip(session.level.value.capitalize(), "info")
+            st.caption(f":material/groups: {_booked(session)}")
             if session.status != SessionStatus.SCHEDULED:
-                st.markdown(":gray-background[**Called off**]")
+                ui.chip("Called off", "neutral")
                 continue
             ui.badge(conditions.get(session.id, _NO_FORECAST))
             edit_col, delete_col, call_col = st.columns(3)
@@ -250,13 +251,14 @@ def main() -> None:
     Rules: section 11 (My sessions), LU07, LU09, R2.1-R2.11, R8.1-R8.5.
     """
     engine = ui.get_engine()
+    ui.inject_styles()
     actor = ui.current_actor(engine)
     if actor is None:
         st.stop()
 
-    st.title("My sessions")
+    ui.page_header("My sessions", "What needs you first, then everything coming up.")
     if actor.role != Role.INSTRUCTOR:
-        st.info(_INSTRUCTORS_ONLY)
+        ui.empty_state(_INSTRUCTORS_ONLY, ":material/info:")
         return
     ui.show_result(st.session_state.pop(_RESULT_KEY, None))
 
@@ -269,8 +271,10 @@ def main() -> None:
             break
 
     _decisions(engine, actor.id)
-    _create_form(engine, actor.id)
     _upcoming(engine, actor.id)
+    # Secondary: creating is deliberate, so it never competes with a decision.
+    with st.expander("Create a session"):
+        _create_form(engine, actor.id)
     ui.footer_credit()
 
 

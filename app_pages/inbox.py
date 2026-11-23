@@ -26,8 +26,10 @@ def _item(item: dict) -> None:
     """
     text = ui.plain(item["message"])
     unread = item["read_at"] is None
-    with st.container(border=True):
-        st.caption(fmt_dt(item["created_at"]) + (" · Unread" if unread else ""))
+    with ui.card():
+        if unread:
+            ui.chip("Unread", "info")
+        st.caption(fmt_dt(item["created_at"]))
         st.markdown(f"**{text}**" if unread else text)
 
 
@@ -37,11 +39,12 @@ def main() -> None:
     Rules: section 11 (Inbox), LU11, R11.3.
     """
     engine = ui.get_engine()
+    ui.inject_styles()
     actor = ui.current_actor(engine)
     if actor is None:
         st.stop()
 
-    st.title("Inbox")
+    ui.page_header("Inbox", "What changed since you last looked.")
     ui.show_result(st.session_state.pop(_RESULT_KEY, None))
 
     listed = ui.run_action(notifications.list_notifications, engine, actor.id)
@@ -52,11 +55,11 @@ def main() -> None:
         return
     items = listed.data
     if not items:
-        st.info(_EMPTY)
+        ui.empty_state(_EMPTY, ":material/inbox:")
         return
 
     if any(item["read_at"] is None for item in items):
-        if st.button("Mark all as read", type="primary"):
+        if st.button("Mark all as read", type="primary", width="stretch"):
             result = ui.run_action(notifications.mark_all_read, engine, actor.id)
             if result is not None:
                 st.session_state[_RESULT_KEY] = result

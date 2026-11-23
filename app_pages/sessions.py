@@ -66,8 +66,9 @@ def _finish(result) -> None:
 def _book_dialog(engine, actor_id: int, card: booking.SessionCard,
                  condition: Condition) -> None:
     session = card.session
-    st.markdown(f"**{_when(session)}**")
-    st.caption(f"{session.level.value.capitalize()} · {ui.plain(session.instructor_name)}")
+    st.markdown(f"### {_when(session)}")
+    ui.chip(session.level.value.capitalize(), "info")
+    st.caption(f":material/person: {ui.plain(session.instructor_name)}")
     st.write(f"Uses 1 credit. Free cancellation until {fmt_dt(card.free_cancel_until)}.")
     ui.badge(condition)
     warning = booking.call_off_warning(condition)
@@ -106,26 +107,34 @@ def _request_book(card: booking.SessionCard, condition: Condition) -> None:
 def _actions(engine, actor_id: int, card: booking.SessionCard, condition: Condition) -> None:
     session = card.session
     if card.book_block:
-        st.button(card.book_block, disabled=True, key=f"blocked_{session.id}")
+        st.button(card.book_block, disabled=True, key=f"blocked_{session.id}",
+                  width="stretch")
     elif session.booked_count >= session.capacity:
-        if st.button("Join waitlist", key=f"join_{session.id}"):
+        if st.button("Join waitlist", key=f"join_{session.id}", width="stretch"):
             _finish(ui.run_action(booking.join_waitlist, engine, actor_id, session.id))
     else:
-        st.button("Book", type="primary", key=f"book_{session.id}",
+        st.button("Book", type="primary", key=f"book_{session.id}", width="stretch",
                   on_click=_request_book, args=(card, condition))
 
 
 def _card(engine, actor, card: booking.SessionCard, condition: Condition) -> None:
+    # Decision order: when, who and what level, how many places, conditions,
+    # what it costs, then the action.
     session = card.session
-    with st.container(border=True):
-        st.markdown(f"**{_when(session)}**")
-        st.caption(f"{session.level.value.capitalize()} · {ui.plain(session.instructor_name)}")
-        st.write(_places(card))
-        ui.badge(condition)
+    with ui.card():
+        st.markdown(f"### {_when(session)}")
+        level_col, status_col = st.columns([1, 1])
+        with level_col:
+            ui.chip(session.level.value.capitalize(), "info")
         status = _status_text(card.my_status)
         if status:
-            st.markdown(f":blue-background[**{status}**]")
+            with status_col:
+                ui.chip(status, "good" if status == "Booked" else "info")
+        st.caption(f":material/person: {ui.plain(session.instructor_name)}")
+        st.write(_places(card))
+        ui.badge(condition)
         if actor.role == Role.STUDENT:
+            st.caption("Uses 1 credit")
             _actions(engine, actor.id, card, condition)
 
 
@@ -143,7 +152,7 @@ def _cards(engine, actor, level: Level | None, only_bookable: bool) -> None:
     if cards is None:
         return
     if not cards:
-        st.info(_NO_SESSIONS)
+        ui.empty_state(_NO_SESSIONS)
         return
     conditions = ui.run_action(
         forecast.conditions_for_sessions, engine, [card.session for card in cards]
@@ -154,7 +163,7 @@ def _cards(engine, actor, level: Level | None, only_bookable: bool) -> None:
         and (not only_bookable or card.can_book)
     ]
     if not shown:
-        st.info(_NO_MATCH)
+        ui.empty_state(_NO_MATCH, ":material/filter_alt_off:")
         return
     for card in shown:
         _card(engine, actor, card, conditions.get(card.session.id, _NO_FORECAST))
@@ -166,12 +175,13 @@ def main() -> None:
     Rules: section 11 (Sessions), LU03, LU04, LU05.
     """
     engine = ui.get_engine()
+    ui.inject_styles()
     actor = ui.current_actor(engine)
     if actor is None:
         st.stop()
     student = actor.role == Role.STUDENT
 
-    st.title("Sessions")
+    ui.page_header("Sessions", "The next 14 days at the spot.")
     ui.show_result(st.session_state.pop(_RESULT_KEY, None))
 
     level_col, toggle_col = st.columns([3, 2], vertical_alignment="bottom")

@@ -55,7 +55,7 @@ def _booked(rows: list[dict]) -> None:
     """
     st.subheader(f"Booked ({len(rows)})")
     if not rows:
-        st.info("Nobody is booked yet.")
+        ui.empty_state("Nobody is booked yet.", ":material/person_off:")
         return
     # st.dataframe draws every cell as plain text, so names are never markup.
     st.dataframe(
@@ -166,11 +166,12 @@ def main() -> None:
     Rules: section 11 (Roster), LU12.
     """
     engine = ui.get_engine()
+    ui.inject_styles()
     actor = ui.current_actor(engine)
     if actor is None:
         st.stop()
 
-    st.title("Roster")
+    ui.page_header("Roster", "Who is booked, and who turned up.")
     for result in st.session_state.pop(_RESULTS_KEY, []):
         ui.show_result(result)
 
@@ -181,7 +182,7 @@ def main() -> None:
         ui.show_result(listed)
         return
     if not listed.data:
-        st.info(_NO_SESSIONS)
+        ui.empty_state(_NO_SESSIONS, ":material/event_busy:")
         return
     by_id = {s.id: s for s in listed.data}
     session_id = st.selectbox("Session", list(by_id), format_func=lambda i: _label(by_id[i]),
@@ -194,9 +195,10 @@ def main() -> None:
         ui.show_result(loaded)
         return
     session = loaded.data["session"]
+    # Decision order: who is here and marking them, then the rest.
     _booked(loaded.data["booked"])
-    _waitlist(loaded.data["waitlist"])
     _attendance(engine, actor.id, session, loaded.data["booked"])
+    _waitlist(loaded.data["waitlist"])
     _actions(engine, actor.id, session)
 
 

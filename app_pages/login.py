@@ -13,9 +13,10 @@ from lineup.logic import accounts
 from lineup.services import members
 
 engine = ui.get_engine()
+ui.inject_styles()
 
-st.title("LineUp")
-st.caption("Surf sessions for the campus surf club.")
+ui.page_header("LineUp", "Surf sessions for the campus surf club.")
+st.html(ui.WAVE_SVG)
 
 log_in_tab, sign_up_tab = st.tabs(["Log in", "Sign up"])
 
